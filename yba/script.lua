@@ -8435,7 +8435,7 @@ createStandTab(tab_stands, "Stand Skins", {
     {Name = "Chariot Requiem", Skins = {"None", "Bunny Devil", "Ghostface", "Shanks", "Control Devil"}},
     {Name = "Chilli Pepper Alternate Universe", Skins = {"None", "Zenitsu"}},
     {Name = "Weather Report", Skins = {"None", "Aang", "Korra", "Zeus OP"}},
-    {Name = "Diver Down", Skins = {"None", "Bondrewd", "Bubblegum", "Cthulhu", "Deep Sea Diver", "Mermaid", "Nautilodaunt"}},
+    {Name = "Diver Down", Skins = {"None", "Diva Down", "Bondrewd", "Bubblegum", "Cthulhu", "Deep Sea Diver", "Mermaid", "Nautilodaunt"}},
     {Name = "Magicans Red", Skins = {"None", "Undead Flare"}}
 }, function(stand, skin)
     print('[DEBUG.2924] st: ' .. stand .. ' | sk: ' .. skin)
