@@ -3,7 +3,7 @@ do
 
     repeat task.wait() until not PlayerGui:FindFirstChild("LoadingScreen")
     repeat task.wait() until not PlayerGui:FindFirstChild("FinishedLoading")
-    wait(1)
+    wait(0.5)
 
     _G.nga_link = "https://fingernail-loader.assqwesersed.workers.dev/" -- for skinchanger    
     -- cfg
