@@ -6863,85 +6863,87 @@ Library:CreateToggle(visualsSection, "Old Sounds", _G.Config.oldSounds, function
     end
     _G.Config.oldSounds = val
     SaveConfig()
-    local a,b=pcall(function()
-    local rs = game:GetService("ReplicatedStorage")
-    local obj = rs:FindFirstChild("Objects")
-    local rtz = obj and obj:FindFirstChild("Return to Zero")
-    local rtzSound = rtz and rtz:FindFirstChild("Sound")
-    if rtzSound then
-        rtzSound.SoundId = "rbxassetid://6029007816"
-        rtzSound.Volume = 2
-    end
-    for _, itm in pairs(rs.Sounds:GetChildren()) do
-        if itm.Name:match("SwordSwing") then
-            itm.SoundId = "rbxassetid://4096810926"
-            itm.PlaybackSpeed = 0.9
-            itm.Volume = 1
+    if val then
+        local a,b=pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local obj = rs:FindFirstChild("Objects")
+        local rtz = obj and obj:FindFirstChild("Return to Zero")
+        local rtzSound = rtz and rtz:FindFirstChild("Sound")
+        if rtzSound then
+            rtzSound.SoundId = "rbxassetid://6029007816"
+            rtzSound.Volume = 2
         end
-    end
-    local jawbreaker = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker")
-    if jawbreaker then
-        local finish = jawbreaker:FindFirstChild("Finish")
-        local start = jawbreaker:FindFirstChild("Start") 
-        if finish and start then
-            finish.Volume = 0
-            start.Volume = 1
-            start.SoundId = "rbxassetid://231731980"
-            start.PlaybackSpeed = 0.52
-        end 
-    end
-    local livershot = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
-    if livershot then
-        livershot.Volume = 0
-    end
-        local crazy = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Crazy Diamond")
-    if crazy and crazy:FindFirstChild("HitSounds") then
-        local hit = crazy.HitSounds:FindFirstChild("StandHit2")
-        if hit then
-            hit.SoundId = "rbxassetid://4134502335"
-        end
-    end
-
-    local finger = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Star Finger Voiceline")
-    if finger then
-        finger.Volume = 0
-    end
-
-    local stands = rs:FindFirstChild("Stands")
-    local sp = stands and stands:FindFirstChild("Star Platinum")
-    if sp and sp:FindFirstChild("SummonSounds") then
-        local s = sp.SummonSounds:FindFirstChild("Sound")
-        if s then
-            s.SoundId = "rbxassetid://6938423915"
-        end
-    end
-
-    local twau = stands and stands:FindFirstChild("The World Alternate Universe")
-    if twau and twau:FindFirstChild("SummonSounds") then
-        local s = twau.SummonSounds:FindFirstChild("Sound")
-        if s then
-            s.SoundId = "rbxassetid://6938424506"
-        end
-    end
-
-    local tw = stands and stands:FindFirstChild("The World")
-    if tw and tw:FindFirstChild("SummonSounds") then
-        local s = tw.SummonSounds:FindFirstChild("Sound")
-        if s then
-            s.SoundId = "rbxassetid://6938424364"
-        end
-    end
-
-    local sounds = rs:FindFirstChild("Sounds")
-    if sounds then
-        for _, damn in pairs(sounds:GetChildren()) do
-            if damn.Name:match("Blade_Hit") then
-                damn.SoundId = "rbxassetid://4134502335"
+        for _, itm in pairs(rs.Sounds:GetChildren()) do
+            if itm.Name:match("SwordSwing") then
+                itm.SoundId = "rbxassetid://4096810926"
+                itm.PlaybackSpeed = 0.9
+                itm.Volume = 1
             end
         end
+        local jawbreaker = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker")
+        if jawbreaker then
+            local finish = jawbreaker:FindFirstChild("Finish")
+            local start = jawbreaker:FindFirstChild("Start") 
+            if finish and start then
+                finish.Volume = 0
+                start.Volume = 1
+                start.SoundId = "rbxassetid://231731980"
+                start.PlaybackSpeed = 0.52
+            end 
+        end
+        local livershot = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
+        if livershot then
+            livershot.Volume = 0
+        end
+            local crazy = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Crazy Diamond")
+        if crazy and crazy:FindFirstChild("HitSounds") then
+            local hit = crazy.HitSounds:FindFirstChild("StandHit2")
+            if hit then
+                hit.SoundId = "rbxassetid://4134502335"
+            end
+        end
+
+        local finger = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Star Finger Voiceline")
+        if finger then
+            finger.Volume = 0
+        end
+
+        local stands = rs:FindFirstChild("Stands")
+        local sp = stands and stands:FindFirstChild("Star Platinum")
+        if sp and sp:FindFirstChild("SummonSounds") then
+            local s = sp.SummonSounds:FindFirstChild("Sound")
+            if s then
+                s.SoundId = "rbxassetid://6938423915"
+            end
+        end
+
+        local twau = stands and stands:FindFirstChild("The World Alternate Universe")
+        if twau and twau:FindFirstChild("SummonSounds") then
+            local s = twau.SummonSounds:FindFirstChild("Sound")
+            if s then
+                s.SoundId = "rbxassetid://6938424506"
+            end
+        end
+
+        local tw = stands and stands:FindFirstChild("The World")
+        if tw and tw:FindFirstChild("SummonSounds") then
+            local s = tw.SummonSounds:FindFirstChild("Sound")
+            if s then
+                s.SoundId = "rbxassetid://6938424364"
+            end
+        end
+
+        local sounds = rs:FindFirstChild("Sounds")
+        if sounds then
+            for _, damn in pairs(sounds:GetChildren()) do
+                if damn.Name:match("Blade_Hit") then
+                    damn.SoundId = "rbxassetid://4134502335"
+                end
+            end
+        end
+        end)
+        if not a then warn("[OLD SOUNDS] " .. tostring(b)) end
     end
-    end)
-    if not a then warn("[OLD SOUNDS] " .. tostring(b)) end
 end)
 
 Library:CreateToggle(visualsSection, "Old SP Stand", _G.Config.oldAnimationsSp, function(val)
@@ -6951,10 +6953,14 @@ Library:CreateToggle(visualsSection, "Old SP Stand", _G.Config.oldAnimationsSp, 
 
     _G.Config.oldAnimationsSp = val
     SaveConfig()
-    local a,b=pcall(function()
-    toggleOldSpSummon(val)
-    end)
-    if not a then warn("[OLD SP STAND] " .. tostring(b)) end
+    if val then
+        local a,b=pcall(function()
+        toggleOldSpSummon(val)
+        end)
+        if not a then warn("[OLD SP STAND] " .. tostring(b)) end
+    else
+        toggleOldSpSummon(false)
+    end
 end)
 
 Library:CreateToggle(visualsSection, "Old Boxing", _G.Config.oldAnimationsBox, function(val)
@@ -6968,7 +6974,6 @@ Library:CreateToggle(visualsSection, "Old Boxing", _G.Config.oldAnimationsBox, f
 
     if not val then
         if stopOldBox then stopOldBox() end
-        toggleOldSpSummon(false)
         return
     end 
 
