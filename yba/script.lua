@@ -66,6 +66,11 @@ do
         espCornerBox = true,
         espAnimatedGradient = true,
 
+        hideUi = false,
+        mobileUi = false,
+        hidePlayerlist = false,
+        hideBlur = false,
+
         enableBoxModify = false,
         shuffleCd = 8,
         shuffleDist = 1.25,
@@ -6662,6 +6667,8 @@ end)
 local camera = workspace.CurrentCamera
 local tab_misc = Library:CreateClass("Misc")
 local visualsSection = Library:CreateFunctionTab(tab_misc, "Visuals")
+local removalsSection = Library:CreateFunctionTab(tab_misc, "Removals")
+local oldSection = Library:CreateFunctionTab(tab_misc, "Old YBA")
 function applyFov()
     local camera = workspace.CurrentCamera
     if camera then
@@ -6754,8 +6761,57 @@ Library:CreateToggle(visualsSection, "Remove Stand's Barrage", _G.Config.removeB
             end
         end)
     end
+    SaveConfig()
 end)
-Library:CreateToggle(visualsSection, "Old Water Texture", _G.Config.OldWaterTexture, function(val)
+Library:CreateToggle(removalsSection, "Mobile UI", _G.Config.mobileUi, function(val)
+    _G.Config.mobileUi = val
+    if _G.mbbbz then _G.mbbbz:Disconnect() end
+    if val then
+    _G.mbbbz = game:GetService("RunService").RenderStepped:Connect(function()
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.MobileSupport.Visible = true
+    end)
+    else
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.MobileSupport.Visible = false
+    end
+    SaveConfig()
+end)
+Library:CreateToggle(removalsSection, "Hide UI", _G.Config.hideUi, function(val)
+    _G.Config.hideUi = val
+    if _G.mbbbz1 then _G.mbbbz1:Disconnect() end
+    if val then
+    _G.mbbbz1 = game:GetService("RunService").RenderStepped:Connect(function()
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.Visible = false
+    end)
+    else
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.Visible = true
+    end
+    SaveConfig()
+end)
+Library:CreateToggle(removalsSection, "Hide Playerlist", _G.Config.hidePlayerlist, function(val)
+    _G.Config.hidePlayerlist = val
+    if _G.mbbbz2 then _G.mbbbz2:Disconnect() end
+    if val then
+    _G.mbbbz2 = game:GetService("RunService").RenderStepped:Connect(function()
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Playerlist.Visible = false
+    end)
+    else
+        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Playerlist.Visible = true
+    end
+    SaveConfig()
+end)
+Library:CreateToggle(removalsSection, "Hide Attack's Blur", _G.Config.hideBlur, function(val)
+    _G.Config.hideBlur = val
+    if _G.mbbbz3 then _G.mbbbz3:Disconnect() end
+    if val then
+    _G.mbbbz3 = game:GetService("RunService").RenderStepped:Connect(function()
+    pcall(function() game:GetService("Players").LocalPlayer.PlayerGui.HurtGui:Destroy() end)
+    pcall(function() game:GetService("Lighting").EyeGougeHit:Destroy() end)
+    pcall(function() game:GetService("Lighting").Bloom:Destroy() end)
+    end)
+    end
+    SaveConfig()
+end)
+Library:CreateToggle(oldSection, "Old Water Texture", _G.Config.OldWaterTexture, function(val)
     _G.Config.OldWaterTexture = val
     local succ, err = pcall(function()
         local ocean = getOcean()
@@ -6772,7 +6828,7 @@ Library:CreateToggle(visualsSection, "Old Water Texture", _G.Config.OldWaterText
     if not succ then warn("[OLD WATER TEXTURE] " .. err) end
     SaveConfig()
 end)
-Library:CreateToggle(visualsSection, "Old Map Textures", _G.Config.OldMapTextures, function(val)
+Library:CreateToggle(oldSection, "Old Map Textures", _G.Config.OldMapTextures, function(val)
     _G.Config.OldMapTextures = val
     local succ, err = pcall(function()
         updateMapTextures(val)
@@ -6780,7 +6836,7 @@ Library:CreateToggle(visualsSection, "Old Map Textures", _G.Config.OldMapTexture
     if not succ then warn("[OLD MAP TEXTURES] " .. err) end
     SaveConfig()
 end)
-Library:CreateToggle(visualsSection, "Old Cooldowns", _G.Config.oldCooldowns, function(state)
+Library:CreateToggle(oldSection, "Old Cooldowns", _G.Config.oldCooldowns, function(state)
     _G.oldstate = _G.Config.oldCooldowns
     _G.Config.oldCooldowns = state
     if state then
@@ -6857,7 +6913,7 @@ Library:CreateToggle(visualsSection, "Old Cooldowns", _G.Config.oldCooldowns, fu
     end
     SaveConfig()
 end)
-Library:CreateToggle(visualsSection, "Old Sounds", _G.Config.oldSounds, function(val)
+Library:CreateToggle(oldSection, "Old Sounds", _G.Config.oldSounds, function(val)
     if not val and _G.Config.oldSounds then
         warn("rejoin may required")
     end
@@ -6946,7 +7002,7 @@ Library:CreateToggle(visualsSection, "Old Sounds", _G.Config.oldSounds, function
     end
 end)
 
-Library:CreateToggle(visualsSection, "Old SP Stand", _G.Config.oldAnimationsSp, function(val)
+Library:CreateToggle(oldSection, "Old SP Stand", _G.Config.oldAnimationsSp, function(val)
     if not val and _G.Config.oldAnimationsSp then
         warn("rejoin may required")
     end
@@ -6963,7 +7019,7 @@ Library:CreateToggle(visualsSection, "Old SP Stand", _G.Config.oldAnimationsSp, 
     end
 end)
 
-Library:CreateToggle(visualsSection, "Old Boxing", _G.Config.oldAnimationsBox, function(val)
+Library:CreateToggle(oldSection, "Old Boxing", _G.Config.oldAnimationsBox, function(val)
     if not val and _G.Config.oldAnimationsBox then
         warn("rejoin may required")
     end
