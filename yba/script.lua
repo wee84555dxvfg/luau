@@ -107,7 +107,9 @@ do
         timeSkipAngle = 0.3,
 
         enableCustomDeathSound = false,
-        oldSoundsAndAnimations = false,
+        oldSounds = false,
+        oldAnimationsSp = false,
+        oldAnimationsBox = false,
         customDeathSound = "...",
 
         enableAimbot = false,
@@ -2834,7 +2836,7 @@ function clearPose()
 end
 
 function setupCharacter(character)
-    if not _G.Config.oldSoundsAndAnimations then return end
+    if not _G.Config.oldAnimationsSp then return end
     local sss = game:GetService("Players").LocalPlayer.PlayerStats.Stand
     if sss and sss.Value == "Star Platinum" then 
         setPose("Old SP")
@@ -6849,37 +6851,20 @@ Library:CreateToggle(visualsSection, "Old Cooldowns", _G.Config.oldCooldowns, fu
                 _G.colorRn = Color3.fromRGB(255,255,255)
             end)
         end)
-        game:GetService("Players").LocalPlayer.Character.Humanoid.Health = -1
     else
         if _G.coolConn then _G.coolConn:Disconnect() end
         if _G.haha then _G.haha:Disconnect() end
-        if _G.oldstate == true then
-            game:GetService("Players").LocalPlayer.Character.Humanoid.Health = -1
-        end
     end
     SaveConfig()
 end)
-Library:CreateToggle(visualsSection, "Old Sounds and Animations", _G.Config.oldSoundsAndAnimations, function(val)
-    if not val and _G.Config.oldSoundsAndAnimations then
+Library:CreateToggle(visualsSection, "Old Sounds", _G.Config.oldSounds, function(val)
+    if not val and _G.Config.oldSounds then
         warn("rejoin may required")
     end
-
-    _G.Config.oldSoundsAndAnimations = val
+    _G.Config.oldSounds = val
     SaveConfig()
-
-
-    if not val then
-        if stopOldBox then stopOldBox() end
-        toggleOldSpSummon(false)
-        return
-    end 
-
-    local oldSoundsOk, oldSoundsErr = pcall(function()
-    
-    toggleOldSpSummon(val)
-
+    local a,b=pcall(function()
     local rs = game:GetService("ReplicatedStorage")
-
     local obj = rs:FindFirstChild("Objects")
     local rtz = obj and obj:FindFirstChild("Return to Zero")
     local rtzSound = rtz and rtz:FindFirstChild("Sound")
@@ -6895,8 +6880,7 @@ Library:CreateToggle(visualsSection, "Old Sounds and Animations", _G.Config.oldS
         end
     end
     local jawbreaker = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker")
-    local jawbreaker2 = rs:FindFirstChild("Anims"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker")
-    if jawbreaker and jawbreaker2 then
+    if jawbreaker then
         local finish = jawbreaker:FindFirstChild("Finish")
         local start = jawbreaker:FindFirstChild("Start") 
         if finish and start then
@@ -6905,27 +6889,12 @@ Library:CreateToggle(visualsSection, "Old Sounds and Animations", _G.Config.oldS
             start.SoundId = "rbxassetid://231731980"
             start.PlaybackSpeed = 0.52
         end 
-
-        jawbreaker2.AnimationId = "rbxassetid://4211804997"
     end
-
-    local livershot2 = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
-    local livershot = rs:FindFirstChild("Anims"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
-    if livershot and livershot2 then
-        livershot.AnimationId = "rbxassetid://4095625816"
-        livershot2.Volume = 0
+    local livershot = rs:FindFirstChild("Sounds"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
+    if livershot then
+        livershot.Volume = 0
     end
-
-    for _, item in pairs(rs:FindFirstChild("Objects"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker"):GetChildren()) do
-        item:Destroy()
-    end
-    for _, item in pairs(rs:FindFirstChild("Objects"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot"):GetChildren()) do
-        item:Destroy()
-    end
-
-    oldBox()
-
-    local crazy = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Crazy Diamond")
+        local crazy = rs:FindFirstChild("Sounds") and rs.Sounds:FindFirstChild("Crazy Diamond")
     if crazy and crazy:FindFirstChild("HitSounds") then
         local hit = crazy.HitSounds:FindFirstChild("StandHit2")
         if hit then
@@ -6972,7 +6941,61 @@ Library:CreateToggle(visualsSection, "Old Sounds and Animations", _G.Config.oldS
         end
     end
     end)
-    if not oldSoundsOk then warn("[OLD SOUNDS AND ANIMATIONS] " .. tostring(oldSoundsErr)) end
+    if not a then warn("[OLD SOUNDS] " .. tostring(b)) end
+end)
+
+Library:CreateToggle(visualsSection, "Old SP Stand", _G.Config.oldAnimationsSp, function(val)
+    if not val and _G.Config.oldAnimationsSp then
+        warn("rejoin may required")
+    end
+
+    _G.Config.oldAnimationsSp = val
+    SaveConfig()
+    local a,b=pcall(function()
+    toggleOldSpSummon(val)
+    end)
+    if not a then warn("[OLD SP STAND] " .. tostring(b)) end
+end)
+
+Library:CreateToggle(visualsSection, "Old Boxing", _G.Config.oldAnimationsBox, function(val)
+    if not val and _G.Config.oldAnimationsBox then
+        warn("rejoin may required")
+    end
+
+    _G.Config.oldAnimationsBox = val
+    SaveConfig()
+
+
+    if not val then
+        if stopOldBox then stopOldBox() end
+        toggleOldSpSummon(false)
+        return
+    end 
+
+    local a, b = pcall(function()
+
+    local rs = game:GetService("ReplicatedStorage")
+
+    local jawbreaker2 = rs:FindFirstChild("Anims"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker")
+    if jawbreaker2 then
+        jawbreaker2.AnimationId = "rbxassetid://4211804997"
+    end
+
+    local livershot = rs:FindFirstChild("Anims"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot")
+    if livershot then
+        livershot.AnimationId = "rbxassetid://4095625816"
+    end
+
+    for _, item in pairs(rs:FindFirstChild("Objects"):FindFirstChild("Boxing"):FindFirstChild("Jawbreaker"):GetChildren()) do
+        item:Destroy()
+    end
+    for _, item in pairs(rs:FindFirstChild("Objects"):FindFirstChild("Boxing"):FindFirstChild("Liver Shot"):GetChildren()) do
+        item:Destroy()
+    end
+
+    oldBox()
+    end)
+    if not a then warn("[OLD BOXING] " .. tostring(b)) end
 end)
 Library:CreateToggle(visualsSection, "Enable Custom Death Sound", _G.Config.enableCustomDeathSound, function(state)
     local rs = game:GetService("ReplicatedStorage")
