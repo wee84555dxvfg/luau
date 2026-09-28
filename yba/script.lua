@@ -71,6 +71,9 @@ do
         hidePlayerlist = false,
         hideBlur = false,
 
+        instantBarrage = false,
+        instantBarrageR = false,
+        instantBarrageHoldDuration = 6,
         enableBoxModify = false,
         shuffleCd = 8,
         shuffleDist = 1.25,
@@ -6056,6 +6059,7 @@ Library:CreateSlider(movementSection, "Mobile Exploit: Jump Power", _G.Config.me
     _G.Config.meJumpPower = val
     SaveConfig()
 end)
+
 Library:CreateToggle(movementSection, "Anti Time Stop", _G.Config.enableAntiTS, function(state)
     _G.Config.enableAntiTS = state
     if state then
@@ -6515,7 +6519,7 @@ end
 _G.AutoParry = AutoParry
 
 
-Library:CreateToggle(autoParrySection, "Enable Auto Parry", _G.Config.autoParryEnabled, function(state)
+Library:CreateToggle(autoParrySection, "Enable Auto Parry(F)", _G.Config.autoParryEnabled, function(state)
     _G.Config.autoParryEnabled = state
     SaveConfig()
     if state then
@@ -6527,6 +6531,86 @@ end)
 Library:CreateSlider(autoParrySection, "Parry Radius", _G.Config.autoParryRadius, 1, 50, function(val)
     _G.Config.autoParryRadius = math.floor(val)
     PARRY_CONFIG.radius = _G.Config.autoParryRadius
+    SaveConfig()
+end)
+_G.barrageButton = Enum.KeyCode.E
+Library:CreateToggle(autoParrySection, "Enable Instant Barrage(E)", _G.Config.instantBarrage, function(state)
+    _G.Config.instantBarrage = state
+    if state then
+        local Players = game:GetService("Players")
+        local RS = game:GetService("ReplicatedStorage")
+        local VIM = game:GetService("VirtualInputManager")
+        local LP = Players.LocalPlayer
+        local event = RS:WaitForChild("ClientFX")
+        local function getPlayerFromPart(part)
+            if not part then return nil end
+            local obj = part
+            while obj and obj ~= workspace do
+                local plr = Players:GetPlayerFromCharacter(obj)
+                if plr then return plr end
+                if obj.Parent == workspace:FindFirstChild("Living") then
+                    local byName = Players:FindFirstChild(obj.Name)
+                    if byName then return byName end
+                end
+                obj = obj.Parent
+            end
+            return nil
+        end
+        local function getNearbyPlayers(radius)
+            local nearby = {}
+            local myChar = LP.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if not myRoot then return nearby end
+
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LP and plr.Character then
+                    local root = plr.Character:FindFirstChild("HumanoidRootPart")
+                    if root and (root.Position - myRoot.Position).Magnitude <= radius then
+                        nearby[plr] = true
+                    end
+                end
+            end
+            return nearby
+        end
+        local blocking = false
+        if _G.imgay then
+            _G.imgay:Disconnect()
+        end
+        _G.imgay = event.OnClientEvent:Connect(function(action, data)
+            if type(action) ~= "string" then return end
+            if not action:match("Stand Barrage") then return end
+            if type(data) ~= "table" or not data.Origin then return end
+
+            local originPlayer = getPlayerFromPart(data.Origin)
+            if not originPlayer then
+                return
+            end
+
+            if not getNearbyPlayers(20)[originPlayer] then return end
+            if blocking then return end
+
+            blocking = true
+            VIM:SendKeyEvent(true, _G.barrageButton, false, game)
+            task.wait(tonumber(_G.Config.instantBarrageHoldDuration))
+            VIM:SendKeyEvent(false, _G.barrageButton, false, game)
+            blocking = false
+        end)
+    else
+         if _G.imgay then
+            _G.imgay:Disconnect()
+        end
+    end
+end)
+Library:CreateToggle(autoParrySection, "Use R instead of E", _G.Config.instantBarrageR, function(state)
+    _G.Config.instantBarrageR = state
+    if state then
+        _G.barrageButton = Enum.KeyCode.R
+    else
+        _G.barrageButton = Enum.KeyCode.E
+    end
+end)
+Library:CreateSlider(autoParrySection, "Instant Barrage Hold Duration", _G.Config.instantBarrageHoldDuration, 1, 6, function(val)
+    _G.Config.instantBarrageHoldDuration = math.floor(val)
     SaveConfig()
 end)
 
