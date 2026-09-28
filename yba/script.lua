@@ -120,6 +120,7 @@ do
         autofarm_farm = false,
         autofarm_sell = false,
 
+        oldCooldowns = false,
         pilotMode = "Free",
         standPilotEnabled = false,
         standPilotSpeed = 50,
@@ -1009,9 +1010,10 @@ local function setupCharacter(character)
 			end
 		end
 	end)
-
+    pcall(function()
 	blockingCapacity:GetPropertyChangedSignal("Value"):Connect(updateDisplay)
 	updateDisplay()
+    end)
 end
 
 for _, character in ipairs(livingFolder:GetChildren()) do
@@ -6774,6 +6776,87 @@ Library:CreateToggle(visualsSection, "Old Map Textures", _G.Config.OldMapTexture
         updateMapTextures(val)
     end)
     if not succ then warn("[OLD MAP TEXTURES] " .. err) end
+    SaveConfig()
+end)
+Library:CreateToggle(visualsSection, "Old Cooldowns", _G.Config.oldCooldowns, function(state)
+    _G.oldstate = _G.Config.oldCooldowns
+    _G.Config.oldCooldowns = state
+    if state then
+        -- old cd
+        _G.colorRn = Color3.fromRGB(255,255,255)
+        if _G.haha then _G.haha:Disconnect() end
+        if _G.coolConn then _G.coolConn:Disconnect() end
+        _G.haha = game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function()
+            wait(1)
+            local function sameColor(a, b)
+                if not a or not b then return false end
+                return a.R == b.R and a.G == b.G and a.B == b.B
+            end
+            local defColors = {
+                Color3.fromRGB(255, 170, 255),
+                Color3.fromRGB(85, 255, 255),
+                Color3.fromRGB(0, 185, 127),
+                Color3.fromRGB(255, 170, 0),
+                Color3.fromRGB(0, 102, 152),
+                Color3.fromRGB(170, 255, 0),
+            }
+            local cooldowns = game:GetService("Players").LocalPlayer.PlayerGui.HUD.Cooldowns
+            if cooldowns then
+            local template = cooldowns.Template
+            if template then
+                local indframe = template.IndicatorFrame
+                local ind = indframe.Indicator
+                local indUIgrad = ind.UIGradient
+                local indshadow = template.IndicatorShadow
+                local cdtext = template.CooldownText
+                local skillname = template.SkillName
+
+                template.Size = UDim2.new(0.06, 0, 0.09, 0)
+                template.Position= UDim2.new(0.925,0,0.75,0) 
+                skillname.Size = UDim2.new(0.7, 0, 0.8, 0)
+                skillname.Position = UDim2.new(0.5,0,0.1,0)
+                skillname.TextXAlignment = "Center"
+                skillname.TextYAlignment = "Center"
+                skillname.Font = Enum.Font.Oswald
+                skillname.ZIndex = 5
+                skillname.TextColor3 = _G.colorRn
+
+                ind.Image = ""
+                ind.BackgroundColor3 = Color3.new(1,1,1)
+                ind.BackgroundTransparency = 0.6
+                ind.Position = UDim2.new(0,0,-3.2,0)
+                ind.Size = UDim2.new(1,0,5.2,0)
+                indUIgrad.Enabled = false
+                indshadow.Visible = false
+
+                cdtext.Visible = false
+
+                end 
+            end
+
+            _G.coolConn = cooldowns.Frame.ChildAdded:Connect(function(child)
+                if not child:IsA("GuiObject") then return end
+                local newColor
+                repeat
+                    newColor = defColors[math.random(1, #defColors)]
+                until not sameColor(newColor, _G.colorRn)
+                _G.colorRn = newColor
+                local skillname = cooldowns.Template.SkillName
+                if skillname then
+                    skillname.TextColor3 = _G.colorRn
+                end
+
+                _G.colorRn = Color3.fromRGB(255,255,255)
+            end)
+        end)
+        game:GetService("Players").LocalPlayer.Character.Humanoid.Health = -1
+    else
+        if _G.coolConn then _G.coolConn:Disconnect() end
+        if _G.haha then _G.haha:Disconnect() end
+        if _G.oldstate == true then
+            game:GetService("Players").LocalPlayer.Character.Humanoid.Health = -1
+        end
+    end
     SaveConfig()
 end)
 Library:CreateToggle(visualsSection, "Old Sounds and Animations", _G.Config.oldSoundsAndAnimations, function(val)
