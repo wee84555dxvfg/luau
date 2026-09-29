@@ -116,6 +116,12 @@ do
         flySpeed = 80,
         ttpExploit = false,
 
+        SilentAimbotEnabled = false,
+        SilentAimbotPrediction = 0.165,
+        SilentAimbotBulletDelay = 0,  
+        SilentAimbotShowTracer = false,
+        SilentAimbotFOV = 999,     
+
         unlockTimeSkip = false,
         timeSkipAngle = 0.3,
 
@@ -7135,24 +7141,37 @@ end)
 local miscSection = Library:CreateFunctionTab(tab_functions, "Misc")
 Library:CreateToggle(miscSection, "Enable Aimbot", _G.Config.enableAimbot, function(v)
     _G.Config.enableAimbot = v
-    if v and _G.Config.aimbotMode == "Silent" then
-        installSilentAimbot()
-    elseif not v and type(uninstallSilentAimbot) == "function" then
-        uninstallSilentAimbot()
+    if not v then
+        _G.Config.SilentAimbotEnabled = false
+    elseif v and _G.Config.aimbotMode == "Silent" then
+        _G.Config.SilentAimbotEnabled = true
     end
     SaveConfig()
 end)
-Library:CreateDropdown(miscSection, "Aimbot Mode", { "Target Lock" }, _G.Config.aimbotMode, false, function(v)
+Library:CreateDropdown(miscSection, "Aimbot Mode", { "Target Lock", "Silent" }, _G.Config.aimbotMode, false, function(v)
     _G.Config.aimbotMode = v
     if _G.Config.enableAimbot and v == "Silent" then
-        installSilentAimbot()
-    elseif type(uninstallSilentAimbot) == "function" then
-        uninstallSilentAimbot()
+        _G.Config.SilentAimbotEnabled = true
+    else 
+        _G.Config.SilentAimbotEnabled = false
     end
     SaveConfig()
 end)
 Library:CreateSlider(miscSection, "Prediction", _G.Config.prediction, 0.01, 1.00, function(v)
     _G.Config.prediction = v
+    _G.Config.SilentAimbotPrediction = v
+    SaveConfig()
+end)
+Library:CreateToggle(miscSection, "Silent Aim: Show Bullet Tracer", _G.Config.SilentAimbotShowTracer, function(v)
+    _G.Config.SilentAimbotShowTracer = v
+    SaveConfig()
+end)
+Library:CreateSlider(miscSection, "Silent Aim: Bullet Delay", _G.Config.SilentAimbotBulletDelay, 0, 10, function(v)
+    _G.Config.SilentAimbotBulletDelay = v
+    SaveConfig()
+end)
+Library:CreateSlider(miscSection, "Silent Aim: FOV", _G.Config.SilentAimbotFOV, 0, 999, function(v)
+    _G.Config.SilentAimbotFOV = v
     SaveConfig()
 end)
 Library:CreateToggle(miscSection, "Enable Stand Pilot", _G.Config.standPilotEnabled, function(v)
@@ -9275,4 +9294,234 @@ skinChangerCharacterConnection = player.CharacterAdded:Connect(function()
     task.spawn(SetupCharacter)
     ApplyGloveSkinWhenReady()
 end)
+
+local succ, err = pcall(function()
+    -- init
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+
+    if not syn or not protectgui then
+        getgenv().protectgui = function() end
+    end
+
+    local Camera = workspace.CurrentCamera
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local GuiService = game:GetService("GuiService")
+    local UserInputService = game:GetService("UserInputService")
+
+    local LocalPlayer = Players.LocalPlayer
+    local Mouse = LocalPlayer:GetMouse()
+
+    local GetPlayers = Players.GetPlayers
+    local WorldToScreen = Camera.WorldToScreenPoint
+    local WorldToViewportPoint = Camera.WorldToViewportPoint
+    local GetPartsObscuringTarget = Camera.GetPartsObscuringTarget
+    local FindFirstChild = game.FindFirstChild
+    local RenderStepped = RunService.RenderStepped
+    local GuiInset = GuiService.GetGuiInset
+    local GetMouseLocation = UserInputService.GetMouseLocation
+
+    local ValidTargetParts = {"Head", "HumanoidRootPart"}
+
+    local ExpectedArguments = {
+        Raycast = {
+            ArgCountRequired = 3,
+            Args = {
+                "Instance", "Vector3", "Vector3", "RaycastParams"
+            }
+        }
+    }
+
+    local targetVelocities = {}
+    local targetLastPositions = {}
+
+    RunService.RenderStepped:Connect(function(deltaTime)
+        for _, player in next, GetPlayers(Players) do
+            if player == LocalPlayer then continue end
+            local character = player.Character
+            if character then
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    if targetLastPositions[player] then
+                        targetVelocities[player] = (root.Position - targetLastPositions[player]) / math.max(deltaTime, 0.001)
+                    end
+                    targetLastPositions[player] = root.Position
+                end
+            end
+        end
+    end)
+
+    local function createTracer(startPos, endPos)
+        local beam = Instance.new("Beam")
+        beam.Width0 = 0.08
+        beam.Width1 = 0.08
+        beam.FaceCamera = true
+        beam.Color = ColorSequence.new(Color3.fromRGB(0, 255, 0))
+        beam.Transparency = NumberSequence.new(0)
+        beam.LightEmission = 1
+        beam.LightInfluence = 0
+
+        local attach0 = Instance.new("Attachment")
+        attach0.WorldPosition = startPos
+        attach0.Parent = workspace.Terrain
+
+        local attach1 = Instance.new("Attachment")
+        attach1.WorldPosition = endPos
+        attach1.Parent = workspace.Terrain
+
+        beam.Attachment0 = attach0
+        beam.Attachment1 = attach1
+        beam.Parent = workspace.Terrain
+
+        task.delay(3.5, function()
+            beam:Destroy()
+            attach0:Destroy()
+            attach1:Destroy()
+        end)
+    end
+
+    local function getPositionOnScreen(Vector)
+        local Vec3, OnScreen = WorldToScreen(Camera, Vector)
+        return Vector2.new(Vec3.X, Vec3.Y), OnScreen
+    end
+
+    local function ValidateArguments(Args, RayMethod)
+        local Matches = 0
+        if #Args < RayMethod.ArgCountRequired then
+            return false
+        end
+        for Pos, Argument in next, Args do
+            if typeof(Argument) == RayMethod.Args[Pos] then
+                Matches = Matches + 1
+            end
+        end
+        return Matches >= RayMethod.ArgCountRequired
+    end
+
+    local function getDirection(Origin, Position)
+        return (Position - Origin).Unit * 1000
+    end
+
+    local function getMousePosition()
+        return GetMouseLocation(UserInputService)
+    end
+
+    local function IsPlayerVisible(Player)
+        local PlayerCharacter = Player.Character
+        local LocalPlayerCharacter = LocalPlayer.Character
+
+        if not (PlayerCharacter or LocalPlayerCharacter) then return end
+
+        local PlayerRoot = FindFirstChild(PlayerCharacter, "HumanoidRootPart")
+
+        if not PlayerRoot then return end
+
+        local CastPoints, IgnoreList = {PlayerRoot.Position, LocalPlayerCharacter, PlayerCharacter}, {LocalPlayerCharacter, PlayerCharacter}
+        local ObscuringObjects = #GetPartsObscuringTarget(Camera, CastPoints, IgnoreList)
+
+        return ((ObscuringObjects == 0 and true) or (ObscuringObjects > 0 and false))
+    end
+
+    local function getClosestTarget()
+        if not _G.Config.SilentAimbotEnabled then return nil, nil end
+
+        local closestPart = nil
+        local closestPlayer = nil
+        local closestDist = _G.Config.SilentAimbotFOV or 250
+
+        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+        for _, Player in next, GetPlayers(Players) do
+            if Player == LocalPlayer then continue end
+
+            local Character = Player.Character
+            if not Character then continue end
+
+            local HumanoidRootPart = FindFirstChild(Character, "HumanoidRootPart")
+            local Humanoid = FindFirstChild(Character, "Humanoid")
+            if not HumanoidRootPart or not Humanoid or Humanoid.Health <= 0 then continue end
+
+            local screenPos, onScreen = getPositionOnScreen(HumanoidRootPart.Position)
+            if not onScreen then continue end
+
+            local dist = (screenPos - screenCenter).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestPart = HumanoidRootPart
+                closestPlayer = Player
+            end
+        end
+
+        return closestPart, closestPlayer
+    end
+
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
+        local Method = getnamecallmethod()
+        local Arguments = {...}
+        local self = Arguments[1]
+
+        if self == workspace and not checkcaller() then
+            if Method == "Raycast" then
+                if _G.Config.SilentAimbotEnabled and _G.Config.SilentAimbotBulletDelay and _G.Config.SilentAimbotBulletDelay > 0 then
+                    task.wait(_G.Config.SilentAimbotBulletDelay)
+                end
+
+                if ValidateArguments(Arguments, ExpectedArguments.Raycast) then
+                    local A_Origin = Arguments[2]
+
+                    local HitPart, targetPlayer = getClosestTarget()
+                    if HitPart then
+                        local targetVel = targetVelocities[targetPlayer] or HitPart.Velocity or Vector3.zero
+                        local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
+
+                        Arguments[3] = getDirection(A_Origin, HitPart.Position + targetVel * predictAmount)
+                        local result = oldNamecall(unpack(Arguments))
+
+                        if result and result.Instance then
+                            local hitChar = result.Instance:FindFirstAncestorOfClass("Model")
+                            if hitChar and Players:GetPlayerFromCharacter(hitChar) then
+                                if _G.Config.SilentAimbotShowTracer then
+                                    createTracer(A_Origin, result.Position)
+                                end
+                            end
+                        end
+
+                        return result
+                    end
+                end
+            end
+        end
+
+        return oldNamecall(...)
+    end))
+
+    local oldIndex = nil
+    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, Index)
+        if self == Mouse and not checkcaller() then
+            local HitPart = getClosestTarget()
+            if HitPart then
+                local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
+
+                if Index == "Target" or Index == "target" then
+                    return HitPart
+                elseif Index == "Hit" or Index == "hit" then
+                    return HitPart.CFrame + (HitPart.Velocity * predictAmount)
+                elseif Index == "X" or Index == "x" then
+                    return self.X
+                elseif Index == "Y" or Index == "y" then
+                    return self.Y
+                elseif Index == "UnitRay" then
+                    return Ray.new(self.Origin, ((HitPart.Position + HitPart.Velocity * predictAmount) - self.Origin).Unit)
+                end
+            end
+        end
+
+        return oldIndex(self, Index)
+    end))
+end)
+if not succ then warn('( !!! ) SILENT AIMBOT: ' .. err) end
+
 end
