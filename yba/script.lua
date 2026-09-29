@@ -5867,7 +5867,7 @@ local assetstable = {
     "kingcrimsonrequiem",
     "madeinheaven",
     "mrpresident",
-    "pluck",
+    "swordstyle",
     "purplehaze",
     "redhotchilipepper",
     "redhotchilipepperalternativeuniverse",
