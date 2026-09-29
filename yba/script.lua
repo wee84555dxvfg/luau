@@ -25,6 +25,11 @@ do
         showBlockCapacity = false,
         showSelectedTag = false,
         tracerToNearPlayer = false,
+        showStandNspec = false,
+        showAttacks = false,
+        saR = 255,
+        saB = 255,
+        saG = 255,
         
         enableFovChanger = false,
 
@@ -5824,6 +5829,444 @@ Library:CreateToggle(basicSettingsSection, "Show Selected Tag", _G.Config.showSe
     _G.Config.showSelectedTag = v
     SaveConfig()
 end)
+function dwnld(fileName)
+    local success, data = pcall(function()
+        return game:HttpGet(_G.nga_link .. "?s=" .. fileName)
+    end)
+
+    if not success then
+        warn("Failed to download file:", fileName)
+        return false
+    end
+
+    writefile("ad/" .. fileName, data)
+
+    return true
+end
+local assetstable = {
+    "aerosmith",
+    "anubis",
+    "beachboy",
+    "boxing",
+    "chariotrequiem",
+    "cmoon",
+    "crazydiamond",
+    "crazydiamondrequiem",
+    "cream",
+    "d4c",
+    "d4clovetrain",
+    "diverdown",
+    "goldexperience",
+    "goldexperiencerequiem",
+    "hamon",
+    "hermitpurple",
+    "hierophantgreen",
+    "killerqueen",
+    "killerqueenbitesthedust",
+    "kingcrimson",
+    "kingcrimsonrequiem",
+    "madeinheaven",
+    "mrpresident",
+    "pluck",
+    "purplehaze",
+    "redhotchilipepper",
+    "redhotchilipepperalternativeuniverse",
+    "scarymonsters",
+    "shadowtheworld",
+    "silverchariot",
+    "spin",
+    "starplatinum",
+    "starplatinumtheworld",
+    "stonefree",
+    "thehand",
+    "theworld",
+    "theworldalternateuniverse",
+    "theworldoverheaven",
+    "tuskact1",
+    "tuskact2",
+    "tuskact3",
+    "tuskact4",
+    "vampirism",
+    "whitealbum",
+    "whitesnake",
+    "weatherreport",
+}
+
+local function checkAssets()
+    for _, name in ipairs(assetstable) do
+        local path = "ad/" .. name .. ".png"
+        if not isfile(path) then
+            if dwnld then
+                dwnld(name .. ".png")
+            end
+        end
+    end
+end
+Library:CreateToggle(basicSettingsSection, "Show Stand & Spec", _G.Config.showStandNspec, function(v)
+    _G.Config.showStandNspec = v
+    SaveConfig()
+    if v then
+        checkAssets()
+        local Players = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+        local Camera = workspace.CurrentCamera
+        local ScreenGui = Instance.new("ScreenGui")
+        function delbradar()
+            local oldGui = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("SpecESP")
+            if oldGui then
+                oldGui:Destroy()
+            end
+        end
+        repeat delbradar() until not LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("SpecESP")
+        ScreenGui.Name = "SpecESP"
+        ScreenGui.ResetOnSpawn = false
+        ScreenGui.IgnoreGuiInset = true
+        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+        _G.SPECESP_ENABLED = true
+
+        local MAX_DISTANCE = 80
+        local OFFSET_X = 60
+        local OFFSET_Y = -32
+        local LEFT_OFFSET_X = -120
+        local IMAGE_SIZE = 64
+
+        local specFolder = "ad/"
+        local standFolder = "ad/"
+
+        local espLabels = {}
+        local standLabels = {}
+
+        local function worldToScreen(pos)
+            local vec, onScreen = Camera:WorldToScreenPoint(pos)
+            if not onScreen then return nil end
+            return Vector2.new(vec.X, vec.Y)
+        end
+
+        local function getValue(player, statName)
+            local stats = player:FindFirstChild("PlayerStats")
+            if not stats then return nil end
+            local value = stats:FindFirstChild(statName)
+            if not value then return nil end
+            return value.Value
+        end
+
+        local function normalize(str)
+            if not str then return nil end
+            local s = str:lower()
+            s = s:gsub("%s+", "")
+            s = s:gsub("%-", "")
+            s = s:gsub(":", "")
+            s = s:gsub("%.", "")
+            s = s:gsub(",", "")
+            s = s:gsub("'", "")
+            s = s:gsub('"', "")
+            s = s:gsub("!", "")
+            s = s:gsub("%?", "")
+            s = s:gsub("_", "")
+            s = s:gsub("/", "")
+            s = s:gsub("\\", "")
+            return s
+        end
+
+        local cachedFiles = {}
+
+        local function refreshFileCache()
+            cachedFiles = {}
+            local ok, files = pcall(listfiles, "ad")
+            if not ok or not files then return end
+            for _, fullPath in ipairs(files) do
+                local name = fullPath:match("([^/\\]+)%.png$")
+                if name then
+                    cachedFiles[#cachedFiles + 1] = name:lower()
+                end
+            end
+            table.sort(cachedFiles, function(a, b)
+                return #a > #b
+            end)
+        end
+
+        refreshFileCache()
+
+        local function getAssetPath(folder, value)
+            if not value then return nil end
+            local normalized = normalize(value)
+            if not normalized or normalized == "" then return nil end
+
+            for _, fileName in ipairs(cachedFiles) do
+                if normalized:find(fileName, 1, true) then
+                    return folder .. fileName .. ".png"
+                end
+            end
+
+            return folder .. normalized .. ".png"
+        end
+
+        local function cleanupLabel(container, player)
+            if container[player] then
+                container[player]:Destroy()
+                container[player] = nil
+            end
+        end
+
+        local function createLabel(container, player)
+            cleanupLabel(container, player)
+            local label = Instance.new("ImageLabel")
+            label.Size = UDim2.fromOffset(IMAGE_SIZE, IMAGE_SIZE)
+            label.BackgroundTransparency = 1
+            label.Visible = false
+            label.ScaleType = Enum.ScaleType.Fit
+            label.Parent = ScreenGui
+            container[player] = label
+        end
+
+        local function updateEZP()
+            if not _G.SPECESP_ENABLED then
+                for _, label in pairs(espLabels) do
+                    label.Visible = false
+                end
+                for _, label in pairs(standLabels) do
+                    label.Visible = false
+                end
+                return
+            end
+
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player == LocalPlayer then continue end
+
+                if not espLabels[player] then
+                    createLabel(espLabels, player)
+                end
+                if not standLabels[player] then
+                    createLabel(standLabels, player)
+                end
+
+                local specLabel = espLabels[player]
+                local standLabel = standLabels[player]
+
+                local character = player.Character
+                if not character then
+                    specLabel.Visible = false
+                    standLabel.Visible = false
+                    continue
+                end
+
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if not root then
+                    specLabel.Visible = false
+                    standLabel.Visible = false
+                    continue
+                end
+
+                if myRoot then
+                    local dist = (root.Position - myRoot.Position).Magnitude
+                    if dist > MAX_DISTANCE then
+                        specLabel.Visible = false
+                        standLabel.Visible = false
+                        continue
+                    end
+                end
+
+                local screenPos = worldToScreen(root.Position)
+                if not screenPos then
+                    specLabel.Visible = false
+                    standLabel.Visible = false
+                    continue
+                end
+
+                local specValue = getValue(player, "Spec")
+                local specPath = getAssetPath(specFolder, specValue)
+                if specPath and isfile(specPath) then
+                    specLabel.Image = getcustomasset(specPath)
+                    specLabel.Size = UDim2.fromOffset(IMAGE_SIZE, IMAGE_SIZE)
+                    specLabel.Position = UDim2.fromOffset(screenPos.X + OFFSET_X, screenPos.Y + OFFSET_Y)
+                    specLabel.Visible = true
+                else
+                    specLabel.Visible = false
+                end
+
+                local standValue = getValue(player, "Stand")
+                local standPath = getAssetPath(standFolder, standValue)
+                if standPath and isfile(standPath) then
+                    standLabel.Image = getcustomasset(standPath)
+                    standLabel.Size = UDim2.fromOffset(IMAGE_SIZE, IMAGE_SIZE)
+                    standLabel.Position = UDim2.fromOffset(screenPos.X + LEFT_OFFSET_X, screenPos.Y + OFFSET_Y)
+                    standLabel.Visible = true
+                else
+                    standLabel.Visible = false
+                end
+            end
+        end
+
+        _G.SPECESP_CLEAR = function()
+            for _, label in pairs(espLabels) do
+                label:Destroy()
+            end
+            for _, label in pairs(standLabels) do
+                label:Destroy()
+            end
+            espLabels = {}
+            standLabels = {}
+        end
+
+        if _G.rqrqr1 then
+            _G.rqrqr1:Disconnect()
+            _G.SPECESP_CLEAR()
+        end
+        if _G.rqrqr2 then
+            _G.rqrqr2:Disconnect()
+            _G.SPECESP_CLEAR()
+        end
+        _G.rqrqr1 = Players.PlayerRemoving:Connect(function(player)
+            cleanupLabel(espLabels, player)
+            cleanupLabel(standLabels, player)
+        end)
+
+        _G.rqrqr2 = RunService.RenderStepped:Connect(updateEZP)
+    else
+        if _G.rqrqr1 then
+            _G.rqrqr1:Disconnect()
+            if _G.SPECESP_CLEAR then _G.SPECESP_CLEAR() end
+        end
+        if _G.rqrqr2 then
+            _G.rqrqr2:Disconnect()
+            if _G.SPECESP_CLEAR then _G.SPECESP_CLEAR() end
+        end
+    end
+end)
+Library:CreateToggle(basicSettingsSection, "Show Attacks", _G.Config.showAttacks, function(v)
+    _G.Config.showAttacks = v
+    SaveConfig()
+
+    if v then
+        local Players = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local LocalPlayer = Players.LocalPlayer
+        local Camera = workspace.CurrentCamera
+        _G.FXESP_ENABLED = true
+        local playerFX = {}
+        local IGNORED_FX = {
+            ["Sound"] = true,
+            ["HitEffect"] = true,
+            ["Damage Indicator"] = true,
+            ["Stand Fade"] = true,
+            ["Cycle Slash Hit"] = true,
+            ["Finisher"] = true
+        }
+        local function isSoundFX(fxName)
+            if type(fxName) ~= "string" then return true end
+            local lower = fxName:lower()
+            for key, _ in pairs(IGNORED_FX) do
+                if lower:find(key:lower(), 1, true) then
+                    return true
+                end
+            end
+            if lower:find("sound") or lower:find("audio") or lower:find("music") then
+                return true
+            end
+            return false
+        end
+        if _G.bigcock1 then
+            _G.bigcock1:Disconnect()
+        end
+        if _G.bigcock2 then
+            _G.bigcock2:Disconnect()
+        end
+        if _G.bigcock3 then
+            _G.bigcock3:Disconnect()
+        end
+        local ClientFX = ReplicatedStorage:WaitForChild("ClientFX", 10)
+        if ClientFX then
+            _G.bigcock1 = ClientFX.OnClientEvent:Connect(function(fxName, data)
+                if isSoundFX(fxName) then return end
+                if type(fxName) ~= "string" then return end
+                local sourcePlayer = nil
+                if data and type(data) == "table" then
+                    local origin = data.Origin
+                    if origin then
+                        local character = origin:FindFirstAncestorOfClass("Model")
+                        if character then
+                            local player = Players:GetPlayerFromCharacter(character)
+                            if player then
+                                sourcePlayer = player
+                            end
+                        end
+                    end
+                    if not sourcePlayer and data.Player then
+                        if typeof(data.Player) == "Instance" and data.Player:IsA("Player") then
+                            sourcePlayer = data.Player
+                        end
+                    end
+                end
+                if not sourcePlayer then return end
+                if sourcePlayer == LocalPlayer then return end
+                playerFX[sourcePlayer] = {
+                    name = fxName,
+                    time = tick(),
+                }
+            end)
+        end
+        _G.bigcock2 = Players.PlayerRemoving:Connect(function(player)
+            playerFX[player] = nil
+        end)
+        local espObjects = {}
+        local function clearESP()
+            for _, obj in pairs(espObjects) do
+                obj:Remove()
+            end
+            espObjects = {}
+        end
+        local function worldToScreen(pos)
+            local vec, onScreen = Camera:WorldToScreenPoint(pos)
+            if not onScreen then return nil end
+            return Vector2.new(vec.X, vec.Y)
+        end
+        local function drawESP()
+            clearESP()
+            if not _G.FXESP_ENABLED then return end
+            local now = tick()
+            for player, fxData in pairs(playerFX) do
+                if now - fxData.time > 1 then
+                    playerFX[player] = nil
+                    continue
+                end
+                if not player.Character then continue end
+                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                if not root then continue end
+                local feetPos = root.Position - Vector3.new(0, 3, 0)
+                local screenPos = worldToScreen(feetPos)
+                if not screenPos then continue end
+                local text = Drawing.new("Text")
+                text.Text = fxData.name
+                text.Position = Vector2.new(screenPos.X, screenPos.Y + 90)
+                text.Color = Color3.fromRGB(_G.Config.saR,_G.Config.saG,_G.Config.saB)
+                text.Size = 16
+                text.Center = true
+                text.Outline = true
+                text.OutlineColor = Color3.fromRGB(0, 0, 0)
+                text.Visible = true
+                table.insert(espObjects, text)
+            end
+        end
+        _G.bigcock3 = RunService.RenderStepped:Connect(drawESP)
+        _G.FXESP_CLEAR = function() playerFX = {} end
+    else
+        if _G.bigcock1 then
+            _G.bigcock1:Disconnect()
+        end
+        if _G.bigcock2 then
+            _G.bigcock2:Disconnect()
+        end
+        if _G.bigcock3 then
+            _G.bigcock3:Disconnect()
+        end
+    end
+end)
 local advancedSettingsSection = Library:CreateFunctionTab(tab_esp, "Advanced Settings")
 -- Library:CreateToggle(advancedSettingsSection, "ESP Fade By Distance", _G.Config.espFadeByDistance, function(v)
 --     _G.Config.espFadeByDistance = v
@@ -5939,6 +6382,18 @@ Library:CreateSlider(advancedSettingsSection, "Selected Tag, G", _G.Config.selec
 end)
 Library:CreateSlider(advancedSettingsSection, "Selected Tag, B", _G.Config.selectedTagB, 0, 255, function(v)
     _G.Config.selectedTagB = math.floor(v)
+    SaveConfig()
+end)
+Library:CreateSlider(advancedSettingsSection, "Show Attacks, R", _G.Config.saR, 0, 255, function(v)
+    _G.Config.saR = math.floor(v)
+    SaveConfig()
+end)
+Library:CreateSlider(advancedSettingsSection, "Show Attacks, G", _G.Config.saG, 0, 255, function(v)
+    _G.Config.saG = math.floor(v)
+    SaveConfig()
+end)
+Library:CreateSlider(advancedSettingsSection, "Show Attacks, B", _G.Config.saB, 0, 255, function(v)
+    _G.Config.saB = math.floor(v)
     SaveConfig()
 end)
 Library:CreateToggle(advancedSettingsSection, "Change Max Visibility Distance", _G.Config.changeMaxVisibilityDistance, function(v)
