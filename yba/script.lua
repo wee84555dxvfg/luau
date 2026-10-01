@@ -7287,7 +7287,7 @@ game:GetService("UserInputService").InputBegan:Connect(function(inp, gp)
     if not _G.Config.enableBoxModify then return end
     if not pidoras_ebaniy() then return end
     if not game:GetService("Players").LocalPlayer.PlayerStats.Spec.Value == "Boxing" then return end
-	if inp.KeyCode == getKey(boxingShuffle) and _G.crackeSandwichCD then
+	if inp.KeyCode == getKey("boxingShuffle") and _G.crackeSandwichCD then
 		_G.crackeSandwichCD = false
         events()
         task.wait(_G.Config.shuffleCd)
