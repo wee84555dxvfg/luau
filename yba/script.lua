@@ -102,8 +102,14 @@ do
             beforeBlockDelay = 0.45,
             holdDuration = 0.3,
         },
+        fakeDashDuration = 0.4,
+        fakeDashPower = 56.8,
+        fakeDashCd = 0.5,
+        fakeDashEnabled = true,
         enableDash = false,
         dashDistance = 20,
+        enableAutoSprint = false,
+        autoSumStand = false,
         enableSpeedhack = false,
         enableSpeedExploits = false,
         speedExploitsVal = 16,
@@ -178,7 +184,8 @@ do
         aimbot = "LeftAlt",
         standPilot = "P",
         tpToTrgt = "RightAlt",
-        tpToDioOverHeaven = "K"
+        tpToDioOverHeaven = "K",
+        boxingShuffle = "C",
     }
 
     function mergeDefaults(target, defaults)
@@ -6440,6 +6447,68 @@ Library:CreateSlider(movementSection, "Fly Speed", _G.Config.flySpeed, 10, 500, 
     _G.Config.flySpeed = math.floor(v)
     SaveConfig()
 end)
+Library:CreateToggle(movementSection, "Auto Sprint", _G.Config.enableAutoSprint, function(v)
+    _G.Config.enableAutoSprint = v
+    SaveConfig()
+
+    if v then
+        if _G.lllbozo then
+            _G.lllbozo:Disconnect()
+        end
+        _G.v01881 = _G.v01881 or 0
+        _G.v11132 = 0.1
+        function v12539122294(v993881)
+            if v993881 > 16 then return end
+            local v101010 = tick()
+            if v101010 - _G.v01881 < _G.v11132 then return end
+            _G.v01881 = v101010
+            local v00029 = game:GetService("Players").LocalPlayer.Character.RemoteFunction
+            v00029:InvokeServer("ToggleSprinting")
+        end
+        _G.lllbozo = game:GetService("RunService").RenderStepped:Connect(function()
+            local v349 = game:GetService("Players").LocalPlayer.Character
+            if v349 then
+                local v123 = v349.Humanoid
+                if v123 then
+                    if v123.WalkSpeed <= 16 then
+                        v12539122294(v123.WalkSpeed)
+                    end
+                end
+            end
+        end)
+    else
+        if _G.lllbozo then
+            _G.lllbozo:Disconnect()
+        end
+    end
+end)
+Library:CreateToggle(movementSection, "Auto Summon Stand", _G.Config.autoSumStand, function(v)
+    _G.Config.autoSumStand = v
+    SaveConfig()
+
+    if v then   
+        if _G.paragonpidor then
+            _G.paragonpidor:Disconnect()
+        end
+        _G.paragonpidor = game:GetService("RunService").RenderStepped:Connect(function()
+            local p = game:GetService("Players").LocalPlayer.Character
+            if p then
+                local ss = p.SummonedStand
+                if not ss.Value then
+                    local cv = game:GetService("Players").LocalPlayer.Character.RemoteFunction
+                    cv:InvokeServer(
+                        "ToggleStand",
+                        "Toggle"
+                    )
+                end
+            end
+        end)
+    else
+        if _G.paragonpidor then
+            _G.paragonpidor:Disconnect()
+        end
+    end
+end)
 Library:CreateToggle(movementSection, "Speed Exploits", _G.Config.enableSpeedExploits, function(val)
     _G.Config.enableSpeedExploits = val
 
@@ -6631,6 +6700,109 @@ Library:CreateSlider(movementSection, "Shuffle Cooldown", _G.Config.shuffleCd, 0
 end)
 Library:CreateSlider(movementSection, "Shuffle Distance", _G.Config.shuffleDist, 0, 10, function(val)
     _G.Config.shuffleDist = val
+    SaveConfig()
+end)
+
+Library:CreateToggle(movementSection, "Dash Modificator", _G.Config.fakeDashEnabled, function(state)
+    _G.Config.fakeDashEnabled = state
+    if state then
+                
+        if _G.connectionUserInput then
+            _G.connectionUserInput:Disconnect()
+            _G.connectionUserInput = nil
+        end
+        local dashVal = game:GetService("Players").LocalPlayer.PlayerStats.DashKey
+        _G.lastDashTime = _G.lastDashTime or 0
+        _G.connectionUserInput = game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+            if gameProcessed then return end
+            if input.KeyCode ~= Enum.KeyCode[dashVal.Value] then return end
+
+            local LocalPlayer = game:GetService("Players").LocalPlayer
+            local char = LocalPlayer.Character
+            if not char then return end
+
+            local now = tick()
+            local timeLeft = _G.Config.fakeDashCd - (now - _G.lastDashTime)
+            if timeLeft > 0 then
+                return
+            end
+            _G.lastDashTime = now
+
+            local UIS = game:GetService("UserInputService")
+            local direction, animId
+
+            if UIS:IsKeyDown(Enum.KeyCode.W) then
+                direction, animId = 0, "rbxassetid://6926086032"
+            elseif UIS:IsKeyDown(Enum.KeyCode.S) then
+                direction, animId = 180, "rbxassetid://6926086304"
+            elseif UIS:IsKeyDown(Enum.KeyCode.A) then
+                direction, animId = 90, "rbxassetid://6926086567"
+            elseif UIS:IsKeyDown(Enum.KeyCode.D) then
+                direction, animId = -90, "rbxassetid://6926086883"
+            else
+                direction, animId = 180, "rbxassetid://6926086304"
+            end
+
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator"))
+            if animator and animId then
+                local anim = Instance.new("Animation")
+                anim.AnimationId = animId
+                local track = animator:LoadAnimation(anim)
+                track.Looped = false
+                track:Play()
+            end
+
+            local Event2 = game:GetService("ReplicatedStorage"):FindFirstChild("ClientFX")
+            if Event2 then
+                firesignal(Event2.OnClientEvent,
+                    "Dash",
+                    { Origin = root, Duration = _G.Config.fakeDashDuration }
+                )
+            end
+
+            local Event1 = char:FindFirstChild("RemoteEvent")
+            if Event1 then
+                firesignal(Event1.OnClientEvent,
+                    "Dash",
+                    {
+                        Root = root,
+                        Duration = _G.Config.fakeDashDuration,
+                        DashPower = _G.Config.fakeDashPower,
+                        Direction = direction
+                    }
+                )
+            end
+
+            local Event3 = char:FindFirstChild("RemoteEvent")
+            if Event3 then
+                firesignal(Event3.OnClientEvent,
+                    "AddCD",
+                    { Name = "Cracked Dash", Cooldown = _G.Config.fakeDashCd }
+                )
+            end
+        end)
+    else
+        if _G.connectionUserInput then
+            _G.connectionUserInput:Disconnect()
+            _G.connectionUserInput = nil
+        end
+    end
+    SaveConfig()
+end)
+Library:CreateSlider(movementSection, "Dash Duration", _G.Config.fakeDashDuration, 0, 10, function(val)
+    _G.Config.fakeDashDuration = val
+    SaveConfig()
+end)
+Library:CreateSlider(movementSection, "Dash Power", _G.Config.fakeDashPower, 0, 1000, function(val)
+    _G.Config.fakeDashPower = val
+    SaveConfig()
+end)
+Library:CreateSlider(movementSection, "Dash CD", _G.Config.fakeDashCd, 0, 4, function(val)
+    _G.Config.fakeDashCd = val
     SaveConfig()
 end)
 
@@ -7114,7 +7286,8 @@ game:GetService("UserInputService").InputBegan:Connect(function(inp, gp)
     if gp then return end
     if not _G.Config.enableBoxModify then return end
     if not pidoras_ebaniy() then return end
-	if inp.KeyCode == Enum.KeyCode.C and _G.crackeSandwichCD then
+    if not game:GetService("Players").LocalPlayer.PlayerStats.Spec.Value == "Boxing" then return end
+	if inp.KeyCode == getKey(boxingShuffle) and _G.crackeSandwichCD then
 		_G.crackeSandwichCD = false
         events()
         task.wait(_G.Config.shuffleCd)
@@ -7130,7 +7303,7 @@ hookmetamethod(game, "__namecall", function(self, ...)
             local cmd = args[1]
             local data = args[2]
 
-            if cmd == "InputBegan" and type(data) == "table" and data.Input == Enum.KeyCode.C and _G.Config.enableBoxModify and pidoras_ebaniy() then
+            if (cmd == "InputBegan" and type(data) == "table" and data.Input == Enum.KeyCode.C and _G.Config.enableBoxModify and pidoras_ebaniy()) or (cmd == "Dash" and _G.Config.fakeDashEnabled) then
                 return  
             end
         end
@@ -7892,7 +8065,8 @@ local keybindLabels = {
     aimbot = "Aimbot Bind",
     standPilot = "Stand Pilot Bind",
     tpToTrgt = "TP To Target Bind",
-    tpToDioOverHeaven = "TP To Dio OH Bind"
+    tpToDioOverHeaven = "TP To Dio OH Bind",
+    boxingShuffle = "Fake Boxing Shuffle Bind"
 }
 
 local keybindOrder = {
