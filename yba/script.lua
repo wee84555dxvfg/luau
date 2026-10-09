@@ -3101,6 +3101,7 @@ local succ,err = pcall(function()
     local jumping = false
     local hasJumped = false
     local wasOnGround = false
+    local lastJumpTime = 0
 
     local function setupCharacter(character)
         local humanoid = character:WaitForChild("Humanoid")
@@ -3114,6 +3115,12 @@ local succ,err = pcall(function()
         
         hasJumped = false
         wasOnGround = false
+        
+        humanoid.StateChanged:Connect(function(old, new)
+            if new == Enum.HumanoidStateType.Landed or new == Enum.HumanoidStateType.Running then
+                hasJumped = false
+            end
+        end)
     end
 
     LocalPlayer.CharacterAdded:Connect(setupCharacter)
@@ -3184,32 +3191,22 @@ local succ,err = pcall(function()
             end
         end
         
-        local state = humanoid:GetState()
-        if state == Enum.HumanoidStateType.Running then
-            onGround = true
-        end
+        local verticalVelocity = root.Velocity.Y
         
-        if onGround and (not wasOnGround or not jumping) then
-            hasJumped = false
-        end
-        
-        if jumping and onGround and not hasJumped then
+        if jumping and onGround and verticalVelocity <= 1 and not hasJumped and (tick() - lastJumpTime) > 0.15 then
             local jumpVelocity = _G.Config.meJumpPower or 50
             
-            root.Velocity = Vector3.new(
-                root.Velocity.X, 
-                jumpVelocity, 
-                root.Velocity.Z
-            )
+            humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+            root.Velocity = Vector3.new(root.Velocity.X, jumpVelocity, root.Velocity.Z)
             
             hasJumped = true
+            lastJumpTime = tick()
         end
         
         wasOnGround = onGround
         
         -- Shift Lock
-        local shiftLock = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or 
-                         UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+        local shiftLock = UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
         
         if shiftLock then
             humanoid.AutoRotate = false
