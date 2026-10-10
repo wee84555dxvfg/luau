@@ -212,48 +212,47 @@ do
         return ok and data or nil
     end
 
-    function SaveConfig()
+    _G.cfgRev = 0
+    local saveQueued = false
+
+    function SaveConfig(immediate)
+        _G.cfgRev = (_G.cfgRev or 0) + 1
+        if _G.SYNC_REM_FILTER then pcall(_G.SYNC_REM_FILTER) end
+        if _G.SA_APPLY then pcall(_G.SA_APPLY) end
+
         if not writefile then return false end
-        ensureConfigFolder()
-        local encoded = HttpService:JSONEncode(_G.Config)
-        local ok, err = pcall(function()
-            writefile(dir_config, encoded)
-        end)
-        if not ok then
-            _G.ConfigSaveError = err
-            warn("[CONFIG] Save failed: " .. tostring(err))
-            return false
-        end
+        if saveQueued and not immediate then return true end
+        saveQueued = true
 
-        if readfile and isfile and isfile(dir_config) then
-            local verifyOk, saved = pcall(function()
-                return readfile(dir_config)
+        task.spawn(function()
+            if not immediate then task.wait(0.35) end
+            saveQueued = false
+            ensureConfigFolder()
+            local ok, err = pcall(function()
+                writefile(dir_config, HttpService:JSONEncode(_G.Config))
             end)
-            if not verifyOk or saved ~= encoded then
-                _G.ConfigSaveError = verifyOk and "verification mismatch" or saved
-                warn("[CONFIG] Save verification failed: " .. tostring(_G.ConfigSaveError))
-                return false
+            _G.ConfigSaveError = ok and nil or err
+            if not ok then
+                warn("[CONFIG] Save failed: " .. tostring(err))
             end
-        end
-
-        _G.ConfigSaveError = nil
+        end)
         return true
     end
 
+    local bindsQueued = false
     function SaveKeybinds()
         if not writefile then return false end
-        ensureConfigFolder()
-        local encoded = HttpService:JSONEncode(_G.Keybinds)
-        local ok, err = pcall(function()
-            writefile(dir_keybinds, encoded)
+        if bindsQueued then return true end
+        bindsQueued = true
+        task.spawn(function()
+            task.wait(0.35)
+            bindsQueued = false
+            ensureConfigFolder()
+            local ok, err = pcall(function()
+                writefile(dir_keybinds, HttpService:JSONEncode(_G.Keybinds))
+            end)
+            _G.KeybindSaveError = ok and nil or err
         end)
-        if not ok then
-            _G.KeybindSaveError = err
-            warn("[KEYBINDS] Save failed: " .. tostring(err))
-            return false
-        end
-
-        _G.KeybindSaveError = nil
         return true
     end
 
@@ -404,10 +403,52 @@ local function makeBoxLines(thickness)
     }
 end
 
+local ESP_ACCURATE_BOUNDS = false  
+local ESP_MAX_FPS = 0             
+local ESP_HIDE_BEHIND_CAMERA = true
+
+local BLACK = Color3.fromRGB(0, 0, 0)
+local clock = time
+local HP_STEPS = 24
+local hpPalette = {}
+local distStrings = {}
+
+local function hpColorFor(ratio)
+    local idx = math.floor(ratio * HP_STEPS + 0.5)
+    local color = hpPalette[idx]
+    if not color then
+        color = Color3.fromRGB(
+            math.floor(math.min(255, 510 * (1 - idx / HP_STEPS)) + 0.5),
+            math.floor(math.min(255, 510 * (idx / HP_STEPS)) + 0.5),
+            0
+        )
+        hpPalette[idx] = color
+    end
+    return color, idx
+end
+
+local function setPos(obj, x, y, st, key)
+    local p = st[key]
+    if p then
+        if p[1] == x and p[2] == y then return end
+        p[1], p[2] = x, y
+    else
+        st[key] = { x, y }
+    end
+    obj.Position = Vector2.new(x, y)
+end
+
+local function distString(meters)
+    local s = distStrings[meters]
+    if not s then
+        s = meters .. "m"
+        distStrings[meters] = s
+    end
+    return s
+end
+
 local function makeVisual()
     return {
-        boxFill = makeSquare(true, 1),
-        boxFull = makeSquare(false, 1),
         box = makeBoxLines(1.5),
         boxShadow = makeBoxLines(3),
         name = makeText(13),
@@ -415,55 +456,60 @@ local function makeVisual()
         selectedTag = makeText(12),
         healthBack = makeLine(4),
         healthFill = makeLine(3),
-        healthText = makeText(11),
         tracer = makeLine(1.5),
-        skeleton = {}
+        skeleton = {},
+        hidden = false,
+        st = {},
     }
 end
 
 local function removeDrawing(obj)
-    if obj then pcall(function() obj:Remove() end) end
+    if obj then obj:Remove() end
 end
 
+local hideSingles = { "name", "distance", "selectedTag", "healthBack", "healthFill", "tracer" }
+local hideGroups = { "box", "boxShadow", "skeleton" }
+
 local function hideVisual(v)
-    v.boxFill.Visible = false
-    v.boxFull.Visible = false
-    for _, line in pairs(v.box) do line.Visible = false end
-    for _, line in pairs(v.boxShadow) do line.Visible = false end
-    v.name.Visible = false
-    v.distance.Visible = false
-    v.selectedTag.Visible = false
-    v.healthBack.Visible = false
-    v.healthFill.Visible = false
-    v.healthText.Visible = false
-    v.tracer.Visible = false
-    for _, line in pairs(v.skeleton) do line.Visible = false end
+    if v.hidden then return end
+    v.hidden = true
+    for i = 1, #hideSingles do
+        v[hideSingles[i]].Visible = false
+    end
+    for g = 1, #hideGroups do
+        for _, line in pairs(v[hideGroups[g]]) do
+            line.Visible = false
+        end
+    end
+    v.st = {}
+    local items = v.skelItems
+    if items then
+        for i = 1, #items do items[i].on = 0 end
+    end
 end
+
+local cleanupList = {
+    "name", "distance", "selectedTag", "healthBack", "healthFill", "tracer",
+}
 
 local function cleanupPlayer(player)
     local v = visuals[player]
+    playerCache[player] = nil
     if not v then return end
-    removeDrawing(v.boxFill)
-    removeDrawing(v.boxFull)
     for _, line in pairs(v.box) do removeDrawing(line) end
     for _, line in pairs(v.boxShadow) do removeDrawing(line) end
-    removeDrawing(v.name)
-    removeDrawing(v.distance)
-    removeDrawing(v.selectedTag)
-    removeDrawing(v.healthBack)
-    removeDrawing(v.healthFill)
-    removeDrawing(v.healthText)
-    removeDrawing(v.tracer)
     for _, line in pairs(v.skeleton) do removeDrawing(line) end
+    for i = 1, #cleanupList do removeDrawing(v[cleanupList[i]]) end
     visuals[player] = nil
-    playerCache[player] = nil
 end
 
 local function getVisual(player)
-    if not visuals[player] then
-        visuals[player] = makeVisual()
+    local v = visuals[player]
+    if not v then
+        v = makeVisual()
+        visuals[player] = v
     end
-    return visuals[player]
+    return v
 end
 
 local bodyPartNames = {
@@ -492,79 +538,208 @@ local fallbackMap = {
     RightFoot = "RightLowerLeg"
 }
 
+local verticalChains = {
+    { "Head" },
+    { "UpperTorso", "Torso" },
+    { "LowerTorso", "Torso", "UpperTorso" },
+    { "LeftFoot", "LeftLowerLeg", "Left Leg" },
+    { "RightFoot", "RightLowerLeg", "Right Leg" },
+}
+local horizontalChains = {
+    { "UpperTorso", "Torso" },
+    { "LeftHand", "LeftLowerArm", "Left Arm" },
+    { "RightHand", "RightLowerArm", "Right Arm" },
+}
+
+local skeletonPairs = {
+    { "headTorso", { "Head" }, { "UpperTorso", "Torso" } },
+    { "torsoLower", { "UpperTorso", "Torso" }, { "LowerTorso", "Torso", "UpperTorso" } },
+    { "LeftArm1", { "LeftUpperArm", "Left Arm" }, { "UpperTorso", "Torso" } },
+    { "LeftArm2", { "LeftUpperArm", "Left Arm" }, { "LeftLowerArm" } },
+    { "LeftArm3", { "LeftLowerArm" }, { "LeftHand" } },
+    { "RightArm1", { "RightUpperArm", "Right Arm" }, { "UpperTorso", "Torso" } },
+    { "RightArm2", { "RightUpperArm", "Right Arm" }, { "RightLowerArm" } },
+    { "RightArm3", { "RightLowerArm" }, { "RightHand" } },
+    { "LeftLeg1", { "LeftUpperLeg", "Left Leg" }, { "LowerTorso", "Torso", "UpperTorso" } },
+    { "LeftLeg2", { "LeftUpperLeg", "Left Leg" }, { "LeftLowerLeg" } },
+    { "LeftLeg3", { "LeftLowerLeg" }, { "LeftFoot" } },
+    { "RightLeg1", { "RightUpperLeg", "Right Leg" }, { "LowerTorso", "Torso", "UpperTorso" } },
+    { "RightLeg2", { "RightUpperLeg", "Right Leg" }, { "RightLowerLeg" } },
+    { "RightLeg3", { "RightLowerLeg" }, { "RightFoot" } },
+}
+
+local function resolvePart(character, name)
+    local part = character:FindFirstChild(name)
+    if not part and fallbackMap[name] then
+        part = character:FindFirstChild(fallbackMap[name])
+    end
+    if not part and fallbackMap[fallbackMap[name]] then
+        part = character:FindFirstChild(fallbackMap[fallbackMap[name]])
+    end
+    if part and part:IsA("BasePart") then return part end
+    return nil
+end
+
+local function firstOf(character, chain)
+    for i = 1, #chain do
+        local part = resolvePart(character, chain[i])
+        if part then return part end
+    end
+    return nil
+end
+
 local function cacheCharacterParts(player, character)
     local root = character:FindFirstChild("HumanoidRootPart")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not root or not humanoid then return end
 
     local parts = {}
-    for _, name in ipairs(bodyPartNames) do
-        local part = character:FindFirstChild(name)
-        if not part and fallbackMap[name] then
-            part = character:FindFirstChild(fallbackMap[name])
-        end
-        if not part and fallbackMap[fallbackMap[name]] then
-            part = character:FindFirstChild(fallbackMap[fallbackMap[name]])
-        end
-        if part and part:IsA("BasePart") then
-            parts[name] = part
+    for i = 1, #bodyPartNames do
+        local part = resolvePart(character, bodyPartNames[i])
+        if part then parts[bodyPartNames[i]] = part end
+    end
+
+    local vList = {}
+    for i = 1, #verticalChains do
+        local part = firstOf(character, verticalChains[i])
+        if part then vList[#vList + 1] = part end
+    end
+    local hList = {}
+    for i = 1, #horizontalChains do
+        local part = firstOf(character, horizontalChains[i])
+        if part then hList[#hList + 1] = part end
+    end
+
+    local v = getVisual(player)
+    for _, line in pairs(v.skeleton) do line.Visible = false end
+    local pairsList = {}
+    for i = 1, #skeletonPairs do
+        local def = skeletonPairs[i]
+        local a = firstOf(character, def[2])
+        local b = firstOf(character, def[3])
+        if a and b then
+            local line = v.skeleton[def[1]]
+            if not line then
+                line = makeLine(1)
+                v.skeleton[def[1]] = line
+            end
+            pairsList[#pairsList + 1] = { line = line, a = a, b = b, on = 0 }
         end
     end
+
+    v.skelItems = pairsList
 
     playerCache[player] = {
         character = character,
         root = root,
         humanoid = humanoid,
-        parts = parts
+        parts = parts,
+        vBounds = vList,
+        hBounds = hList,
+        skelPairs = pairsList,
+        displayFixed = 0,
     }
+
+    pcall(function()
+        humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    end)
 end
 
-local bodyBoundsOrder = {
-    "Head", "UpperTorso", "LowerTorso", "Torso",
-    "Left Arm", "Right Arm", "Left Leg", "Right Leg",
-    "LeftUpperArm", "LeftLowerArm", "LeftHand",
-    "RightUpperArm", "RightLowerArm", "RightHand",
-    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
-    "RightUpperLeg", "RightLowerLeg", "RightFoot"
-}
+local bounds = { minX = 0, minY = 0, maxX = 0, maxY = 0 }
 
-local function includePartBounds(camera, part, bounds)
+local function includePartBounds(w2vp, camera, part)
     local half = part.Size * 0.5
     local cf = part.CFrame
-    local points = {
-        Vector3.new(-half.X, -half.Y, -half.Z),
-        Vector3.new(-half.X, -half.Y, half.Z),
-        Vector3.new(-half.X, half.Y, -half.Z),
-        Vector3.new(-half.X, half.Y, half.Z),
-        Vector3.new(half.X, -half.Y, -half.Z),
-        Vector3.new(half.X, -half.Y, half.Z),
-        Vector3.new(half.X, half.Y, -half.Z),
-        Vector3.new(half.X, half.Y, half.Z)
-    }
-
-    for _, point in ipairs(points) do
-        local screen = camera:WorldToViewportPoint(cf:PointToWorldSpace(point))
-        if screen.Z > 0 then
-            bounds.minX = math.min(bounds.minX, screen.X)
-            bounds.minY = math.min(bounds.minY, screen.Y)
-            bounds.maxX = math.max(bounds.maxX, screen.X)
-            bounds.maxY = math.max(bounds.maxY, screen.Y)
+    local hx, hy, hz = half.X, half.Y, half.Z
+    local r = cf.RightVector
+    local u = cf.UpVector
+    local f = cf.LookVector
+    local px, py, pz = cf.X, cf.Y, cf.Z
+    for sx = -1, 1, 2 do
+        for sy = -1, 1, 2 do
+            for sz = -1, 1, 2 do
+                local sp = w2vp(camera, Vector3.new(
+                    px + r.X * hx * sx + u.X * hy * sy + f.X * hz * sz,
+                    py + r.Y * hx * sx + u.Y * hy * sy + f.Y * hz * sz,
+                    pz + r.Z * hx * sx + u.Z * hy * sy + f.Z * hz * sz
+                ))
+                if sp.Z > 0 then
+                    if sp.X < bounds.minX then bounds.minX = sp.X end
+                    if sp.Y < bounds.minY then bounds.minY = sp.Y end
+                    if sp.X > bounds.maxX then bounds.maxX = sp.X end
+                    if sp.Y > bounds.maxY then bounds.maxY = sp.Y end
+                end
+            end
         end
     end
 end
 
-local function getBodyBounds(camera, parts)
-    local bounds = {
-        minX = math.huge,
-        minY = math.huge,
-        maxX = -math.huge,
-        maxY = -math.huge
-    }
+local function getBodyBounds(camera, cache)
+    bounds.minX = math.huge
+    bounds.minY = math.huge
+    bounds.maxX = -math.huge
+    bounds.maxY = -math.huge
 
-    for _, name in ipairs(bodyBoundsOrder) do
-        local part = parts[name]
-        if part and part.Parent and part:IsA("BasePart") then
-            includePartBounds(camera, part, bounds)
+    local w2vp = camera.WorldToViewportPoint
+
+    if ESP_ACCURATE_BOUNDS then
+        local parts = cache.parts
+        for i = 1, #bodyPartNames do
+            local part = parts[bodyPartNames[i]]
+            if part and part.Parent then
+                includePartBounds(w2vp, camera, part)
+            end
+        end
+    else
+        local cf = camera.CFrame
+        local up = cf.UpVector
+        local rgt = cf.RightVector
+        local ux, uy, uz = up.X, up.Y, up.Z
+        local rx, ry, rz = rgt.X, rgt.Y, rgt.Z
+
+        local v = cache.vBounds
+        for i = 1, #v do
+            local part = v[i]
+            if part.Parent then
+                local pos = part.Position
+                local h = part.Size.Y * 0.5
+                local px, py, pz = pos.X, pos.Y, pos.Z
+                local s = w2vp(camera, Vector3.new(px + ux * h, py + uy * h, pz + uz * h))
+                if s.Z > 0 then
+                    if s.X < bounds.minX then bounds.minX = s.X end
+                    if s.Y < bounds.minY then bounds.minY = s.Y end
+                    if s.X > bounds.maxX then bounds.maxX = s.X end
+                    if s.Y > bounds.maxY then bounds.maxY = s.Y end
+                end
+                s = w2vp(camera, Vector3.new(px - ux * h, py - uy * h, pz - uz * h))
+                if s.Z > 0 then
+                    if s.X < bounds.minX then bounds.minX = s.X end
+                    if s.Y < bounds.minY then bounds.minY = s.Y end
+                    if s.X > bounds.maxX then bounds.maxX = s.X end
+                    if s.Y > bounds.maxY then bounds.maxY = s.Y end
+                end
+            end
+        end
+
+        local hh = cache.hBounds
+        for i = 1, #hh do
+            local part = hh[i]
+            if part.Parent then
+                local pos = part.Position
+                local size = part.Size
+                local h = (size.X > size.Z and size.X or size.Z) * 0.5
+                local px, py, pz = pos.X, pos.Y, pos.Z
+                local s = w2vp(camera, Vector3.new(px + rx * h, py + ry * h, pz + rz * h))
+                if s.Z > 0 then
+                    if s.X < bounds.minX then bounds.minX = s.X end
+                    if s.X > bounds.maxX then bounds.maxX = s.X end
+                end
+                s = w2vp(camera, Vector3.new(px - rx * h, py - ry * h, pz - rz * h))
+                if s.Z > 0 then
+                    if s.X < bounds.minX then bounds.minX = s.X end
+                    if s.X > bounds.maxX then bounds.maxX = s.X end
+                end
+            end
         end
     end
 
@@ -575,237 +750,336 @@ local function getBodyBounds(camera, parts)
     return bounds.minX - padX, bounds.minY - padY, bounds.maxX + padX, bounds.maxY + padY
 end
 
-local function worldToScreen(camera, part)
-    if not part then return nil end
-    local screen, visible = camera:WorldToViewportPoint(part.Position)
-    if not visible or screen.Z <= 0 then return nil end
-    return Vector2.new(screen.X, screen.Y)
-end
-
-local function getOrCreateSkeletonLine(v, name)
-    if not v.skeleton[name] then
-        v.skeleton[name] = makeLine(1)
-    end
-    return v.skeleton[name]
-end
-
-local function drawSkeletonLine(camera, v, color, name, aPart, bPart)
-    local line = getOrCreateSkeletonLine(v, name)
-    local a = worldToScreen(camera, aPart)
-    local b = worldToScreen(camera, bPart)
-    if a and b then
-        line.From = a
-        line.To = b
+local function paintLine(line, ax, ay, bx, by, color, transparency, item)
+    line.From = Vector2.new(ax, ay)
+    line.To = Vector2.new(bx, by)
+    if item.on ~= 1 then
+        item.on = 1
         line.Color = color
-        line.Transparency = 0.85
+        line.Transparency = transparency
         line.Visible = true
-    else
-        line.Visible = false
     end
 end
 
-local function setLine(line, from, to, color, transparency)
-    line.From = from
-    line.To = to
-    line.Color = color
-    line.Transparency = transparency or 1
-    line.Visible = true
+local function drawSkeleton(camera, cache, v, color)
+    local list = cache.skelPairs
+    if #list == 0 then return end
+    local w2vp = camera.WorldToViewportPoint
+    for i = 1, #list do
+        local item = list[i]
+        local a, b = item.a, item.b
+        local ax, ay, bx, by
+        if a.Parent and b.Parent then
+            local sa = w2vp(camera, a.Position)
+            local sb = w2vp(camera, b.Position)
+            if sa.Z > 0 and sb.Z > 0 then
+                ax, ay, bx, by = sa.X, sa.Y, sb.X, sb.Y
+            end
+        end
+        if ax then
+            paintLine(item.line, ax, ay, bx, by, color, 0.85, item)
+        elseif item.on ~= 0 then
+            item.on = 0
+            item.line.Visible = false
+        end
+    end
 end
 
-local function drawCornerBox(lines, minX, minY, maxX, maxY, color, transparency, offset)
-    offset = offset or 0
-    local width = maxX - minX
-    local height = maxY - minY
-    local corner = math.clamp(math.min(width, height) * 0.28, 8, 18)
+local function setBoxGroup(lines, st, key, minX, minY, maxX, maxY, color, transparency, offset)
     local left = minX - offset
     local right = maxX + offset
     local top = minY - offset
     local bottom = maxY + offset
+    local width = right - left
+    local height = bottom - top
+    local corner = math.clamp((width < height and width or height) * 0.28, 8, 18)
 
-    setLine(lines.topLeftH, Vector2.new(left, top), Vector2.new(left + corner, top), color, transparency)
-    setLine(lines.topLeftV, Vector2.new(left, top), Vector2.new(left, top + corner), color, transparency)
-    setLine(lines.topRightH, Vector2.new(right - corner, top), Vector2.new(right, top), color, transparency)
-    setLine(lines.topRightV, Vector2.new(right, top), Vector2.new(right, top + corner), color, transparency)
-    setLine(lines.bottomLeftH, Vector2.new(left, bottom), Vector2.new(left + corner, bottom), color, transparency)
-    setLine(lines.bottomLeftV, Vector2.new(left, bottom - corner), Vector2.new(left, bottom), color, transparency)
-    setLine(lines.bottomRightH, Vector2.new(right - corner, bottom), Vector2.new(right, bottom), color, transparency)
-    setLine(lines.bottomRightV, Vector2.new(right, bottom - corner), Vector2.new(right, bottom), color, transparency)
+    local shown = st[key]
+    if shown ~= 1 then
+        st[key] = 1
+        for _, line in pairs(lines) do
+            line.Color = color
+            line.Transparency = transparency
+            line.Visible = true
+        end
+    end
+
+    local gk = key .. "G"
+    local g = st[gk]
+    if g then
+        if g[1] == left and g[2] == top and g[3] == right and g[4] == bottom then
+            return
+        end
+    else
+        g = { 0, 0, 0, 0 }
+        st[gk] = g
+    end
+    g[1], g[2], g[3], g[4] = left, top, right, bottom
+
+    local tlh, tlv, trh, trv, blh, blv, brh, brv =
+        lines.topLeftH, lines.topLeftV, lines.topRightH, lines.topRightV,
+        lines.bottomLeftH, lines.bottomLeftV, lines.bottomRightH, lines.bottomRightV
+
+    local x, y
+    x, y = Vector2.new(left, top), Vector2.new(left + corner, top)
+    tlh.From, tlh.To = x, y
+    x, y = Vector2.new(left, top), Vector2.new(left, top + corner)
+    tlv.From, tlv.To = x, y
+    x, y = Vector2.new(right - corner, top), Vector2.new(right, top)
+    trh.From, trh.To = x, y
+    x, y = Vector2.new(right, top), Vector2.new(right, top + corner)
+    trv.From, trv.To = x, y
+    x, y = Vector2.new(left, bottom), Vector2.new(left + corner, bottom)
+    blh.From, blh.To = x, y
+    x, y = Vector2.new(left, bottom - corner), Vector2.new(left, bottom)
+    blv.From, blv.To = x, y
+    x, y = Vector2.new(right - corner, bottom), Vector2.new(right, bottom)
+    brh.From, brh.To = x, y
+    x, y = Vector2.new(right, bottom - corner), Vector2.new(right, bottom)
+    brv.From, brv.To = x, y
 end
 
-local function drawSkeleton(camera, parts, v)
-    if not _G.Config.showSkeleton then
-        for _, line in pairs(v.skeleton) do line.Visible = false end
-        return
-    end
+local espCfg = {
+    active = false,
+    showBox = false, showName = false, showDistance = false, showSkeleton = false,
+    showHealthBar = false, showTracers = false, showSelectedTag = false,
+    tracerToNearPlayer = false, changeMaxVisibilityDistance = false,
+    maxVisibilityDistance = 500, selectedName = nil,
+}
+local espRev = -1
 
-    local head = parts.Head
-    local torso = parts.UpperTorso or parts.Torso
-    local lowerTorso = parts.LowerTorso or torso
-    local color = cachedColors.skeleton
+local function refreshEspCfg()
+    local cfg = _G.Config
+    espCfg.showBox = cfg.showBox == true
+    espCfg.showName = cfg.showName == true
+    espCfg.showDistance = cfg.showDistance == true
+    espCfg.showSkeleton = cfg.showSkeleton == true
+    espCfg.showHealthBar = cfg.showHealthBar == true
+    espCfg.showTracers = cfg.showTracers == true
+    espCfg.showSelectedTag = cfg.showSelectedTag == true
+    espCfg.tracerToNearPlayer = cfg.tracerToNearPlayer == true
+    espCfg.changeMaxVisibilityDistance = cfg.changeMaxVisibilityDistance == true
+    espCfg.maxVisibilityDistance = cfg.maxVisibilityDistance or 500
+    espCfg.selectedName = cfg.input_TargetSurvName
 
-    if head and torso then
-        drawSkeletonLine(camera, v, color, "headTorso", head, torso)
-    end
-    if torso and lowerTorso then
-        drawSkeletonLine(camera, v, color, "torsoLower", torso, lowerTorso)
-    end
+    local active = espCfg.showBox or espCfg.showName or espCfg.showDistance
+        or espCfg.showSkeleton or espCfg.showHealthBar or espCfg.showTracers or espCfg.showSelectedTag
 
-    local function drawArm(side)
-        local upper = parts[side .. "UpperArm"]
-        local lower = parts[side .. "LowerArm"]
-        local hand = parts[side .. "Hand"]
-        if torso and upper then drawSkeletonLine(camera, v, color, side .. "Arm1", torso, upper) end
-        if upper and lower then drawSkeletonLine(camera, v, color, side .. "Arm2", upper, lower) end
-        if lower and hand then drawSkeletonLine(camera, v, color, side .. "Arm3", lower, hand) end
+    if espCfg.active and not active then
+        for _, v in pairs(visuals) do hideVisual(v) end
     end
+    espCfg.active = active
 
-    local function drawLeg(side)
-        local upper = parts[side .. "UpperLeg"]
-        local lower = parts[side .. "LowerLeg"]
-        local foot = parts[side .. "Foot"]
-        if lowerTorso and upper then drawSkeletonLine(camera, v, color, side .. "Leg1", lowerTorso, upper) end
-        if upper and lower then drawSkeletonLine(camera, v, color, side .. "Leg2", upper, lower) end
-        if lower and foot then drawSkeletonLine(camera, v, color, side .. "Leg3", lower, foot) end
+    updateCachedColors()
+    for _, v in pairs(visuals) do
+        v.st = {}
     end
-
-    drawArm("Left")
-    drawArm("Right")
-    drawLeg("Left")
-    drawLeg("Right")
+    for _, cache in pairs(playerCache) do
+        local list = cache.skelPairs
+        if list then
+            for i = 1, #list do list[i].on = -1 end
+        end
+    end
 end
 
-local function updatePlayer(camera, player, nearestPlayer)
+local function updatePlayer(camera, player, nearestPlayer, camPos, lookVec, now)
     local cache = playerCache[player]
     if not cache then
         local char = player.Character
-        if char then
-            cacheCharacterParts(player, char)
-            cache = playerCache[player]
-        end
+        if char then cacheCharacterParts(player, char) end
+        cache = playerCache[player]
         if not cache then return end
     end
 
-    local character = cache.character
-    local root = cache.root
-    local humanoid = cache.humanoid
-    local parts = cache.parts
-
-    if not root or not humanoid or not root.Parent or humanoid.Health <= 0 then
+    local root, humanoid = cache.root, cache.humanoid
+    if not root.Parent or not humanoid.Parent or humanoid.Health <= 0 then
         local v = visuals[player]
         if v then hideVisual(v) end
         return
     end
 
-    local v = getVisual(player)
+    local pos = root.Position
+    local ox, oy, oz = pos.X - camPos.X, pos.Y - camPos.Y, pos.Z - camPos.Z
+    local distSq = ox * ox + oy * oy + oz * oz
 
-    pcall(function() humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end)
-
-    local offset = camera.CFrame.Position - root.Position
-    local distSquared = offset.X * offset.X + offset.Y * offset.Y + offset.Z * offset.Z
-    local maxDist = _G.Config.changeMaxVisibilityDistance and _G.Config.maxVisibilityDistance or math.huge
-    if distSquared > maxDist * maxDist then
-        hideVisual(v)
-        return
+    if ESP_HIDE_BEHIND_CAMERA and distSq > 400 then
+        local along = ox * lookVec.X + oy * lookVec.Y + oz * lookVec.Z
+        if along <= 0 then
+            local old = visuals[player]
+            if old then hideVisual(old) end
+            return
+        end
     end
 
-    local minX, minY, maxX, maxY = getBodyBounds(camera, parts)
-    if not minX then
-        hideVisual(v)
-        return
+    if espCfg.changeMaxVisibilityDistance then
+        local md = espCfg.maxVisibilityDistance
+        if distSq > md * md then
+            local old = visuals[player]
+            if old then hideVisual(old) end
+            return
+        end
+    end
+
+    if now - cache.displayFixed > 2 then
+        cache.displayFixed = now
+        if humanoid.DisplayDistanceType ~= Enum.HumanoidDisplayDistanceType.None then
+            pcall(function()
+                humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            end)
+        end
+    end
+
+    local v = getVisual(player)
+    v.hidden = false
+    local st = v.st
+
+    local needBounds = espCfg.showBox or espCfg.showName or espCfg.showDistance
+        or espCfg.showHealthBar or espCfg.showTracers or espCfg.showSelectedTag
+
+    local minX, minY, maxX, maxY
+    if needBounds then
+        minX, minY, maxX, maxY = getBodyBounds(camera, cache)
+        if not minX then
+            hideVisual(v)
+            return
+        end
     end
 
     -- Box
-    if _G.Config.showBox then
-        drawCornerBox(v.boxShadow, minX, minY, maxX, maxY, Color3.fromRGB(0, 0, 0), 0.55, 1)
-        drawCornerBox(v.box, minX, minY, maxX, maxY, cachedColors.box, 0.95, 0)
-    else
+    if espCfg.showBox then
+        setBoxGroup(v.boxShadow, st, "sh", minX, minY, maxX, maxY, BLACK, 0.55, 1)
+        setBoxGroup(v.box, st, "bx", minX, minY, maxX, maxY, cachedColors.box, 0.95, 0)
+    elseif st.bx ~= 0 then
+        st.bx, st.sh, st.bxG, st.shG = 0, 0, nil, nil
         for _, line in pairs(v.box) do line.Visible = false end
         for _, line in pairs(v.boxShadow) do line.Visible = false end
     end
 
+    local centerX
+    if needBounds then centerX = (minX + maxX) * 0.5 end
+
     -- Name
-    if _G.Config.showName then
-        v.name.Text = player.Name
-        v.name.Position = Vector2.new((minX + maxX) * 0.5, minY - 18)
-        v.name.Color = cachedColors.name
-        v.name.Transparency = 0.95
-        v.name.Visible = true
-    else
+    if espCfg.showName then
+        local nameStr = player.Name
+        if st.nameText ~= nameStr then
+            st.nameText = nameStr
+            v.name.Text = nameStr
+        end
+        setPos(v.name, centerX, minY - 18, st, "nameP")
+        if st.name ~= 1 then
+            st.name = 1
+            v.name.Color = cachedColors.name
+            v.name.Transparency = 0.95
+            v.name.Visible = true
+        end
+    elseif st.name ~= false then
+        st.name = false
         v.name.Visible = false
     end
 
     -- Distance
-    if _G.Config.showDistance then
-        local distance = math.sqrt(distSquared)
-        v.distance.Text = string.format("%dm", math.floor(distance))
-        v.distance.Position = Vector2.new((minX + maxX) * 0.5, maxY + 4)
-        v.distance.Color = cachedColors.distance
-        v.distance.Transparency = 0.9
-        v.distance.Visible = true
-    else
+    if espCfg.showDistance then
+        local text = distString(math.floor(math.sqrt(distSq)))
+        if st.distText ~= text then
+            st.distText = text
+            v.distance.Text = text
+        end
+        setPos(v.distance, centerX, maxY + 4, st, "distP")
+        if st.distance ~= 1 then
+            st.distance = 1
+            v.distance.Color = cachedColors.distance
+            v.distance.Transparency = 0.9
+            v.distance.Visible = true
+        end
+    elseif st.distance ~= false then
+        st.distance = false
         v.distance.Visible = false
     end
 
     -- Selected Tag
-    if _G.Config.showSelectedTag and _G.Config.input_TargetSurvName == player.Name then
-        v.selectedTag.Text = "SELECTED"
-        v.selectedTag.Position = Vector2.new((minX + maxX) * 0.5, maxY + 18)
-        v.selectedTag.Color = cachedColors.selectedTag
-        v.selectedTag.Transparency = 0.95
-        v.selectedTag.Visible = true
-    else
+    if espCfg.showSelectedTag and espCfg.selectedName == player.Name then
+        if st.selText ~= 1 then
+            st.selText = 1
+            v.selectedTag.Text = "SELECTED"
+        end
+        setPos(v.selectedTag, centerX, maxY + 18, st, "selP")
+        if st.selectedTag ~= 1 then
+            st.selectedTag = 1
+            v.selectedTag.Color = cachedColors.selectedTag
+            v.selectedTag.Transparency = 0.95
+            v.selectedTag.Visible = true
+        end
+    elseif st.selectedTag ~= false then
+        st.selectedTag = false
         v.selectedTag.Visible = false
     end
 
     -- Health Bar
-    if _G.Config.showHealthBar then
-        local ratio = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
+    if espCfg.showHealthBar then
+        local maxHp = humanoid.MaxHealth
+        if maxHp < 1 then maxHp = 1 end
+        local ratio = humanoid.Health / maxHp
+        if ratio < 0 then ratio = 0 elseif ratio > 1 then ratio = 1 end
+        local color, idx = hpColorFor(ratio)
         local height = maxY - minY
         local fillHeight = height * ratio
         local x = minX - 6
         v.healthBack.From = Vector2.new(x, minY)
         v.healthBack.To = Vector2.new(x, maxY)
-        v.healthBack.Color = Color3.fromRGB(0, 0, 0)
-        v.healthBack.Transparency = 0.55
-        v.healthBack.Visible = true
         v.healthFill.From = Vector2.new(x, maxY - fillHeight)
         v.healthFill.To = Vector2.new(x, maxY)
-        v.healthFill.Color = Color3.fromRGB(
-            math.clamp(math.floor(255 * (1 - ratio) * 2), 0, 255),
-            math.clamp(math.floor(255 * ratio * 2), 0, 255),
-            0
-        )
-        v.healthFill.Transparency = 0.95
-        v.healthFill.Visible = true
-    else
+        if st.hpBack ~= 1 then
+            st.hpBack = 1
+            v.healthBack.Color = BLACK
+            v.healthBack.Transparency = 0.55
+            v.healthBack.Visible = true
+        end
+        if st.hpIdx ~= idx then
+            st.hpIdx = idx
+            v.healthFill.Color = color
+        end
+        if st.hpFill ~= 1 then
+            st.hpFill = 1
+            v.healthFill.Transparency = 0.95
+            v.healthFill.Visible = true
+        end
+    elseif st.hpBack ~= false or st.hpFill ~= false then
+        st.hpBack = false
+        st.hpFill = false
         v.healthBack.Visible = false
         v.healthFill.Visible = false
     end
 
     -- Tracers
-    if _G.Config.showTracers and (not _G.Config.tracerToNearPlayer or nearestPlayer == player) then
-        local viewport = camera.ViewportSize
-        v.tracer.From = Vector2.new(viewport.X * 0.5, viewport.Y)
-        v.tracer.To = Vector2.new((minX + maxX) * 0.5, maxY)
-        v.tracer.Color = cachedColors.tracer
-        v.tracer.Transparency = 0.75
-        v.tracer.Visible = true
-    else
+    if espCfg.showTracers and (not espCfg.tracerToNearPlayer or nearestPlayer == player) then
+        local vp = camera.ViewportSize
+        v.tracer.From = Vector2.new(vp.X * 0.5, vp.Y)
+        v.tracer.To = Vector2.new(centerX, maxY)
+        if st.tracer ~= 1 then
+            st.tracer = 1
+            v.tracer.Color = cachedColors.tracer
+            v.tracer.Transparency = 0.75
+            v.tracer.Visible = true
+        end
+    elseif st.tracer ~= false then
+        st.tracer = false
         v.tracer.Visible = false
     end
 
     -- Skeleton
-    if _G.Config.showSkeleton then
-        drawSkeleton(camera, parts, v)
-    else
+    if espCfg.showSkeleton then
+        drawSkeleton(camera, cache, v, cachedColors.skeleton)
+    elseif st.skel ~= 0 then
+        st.skel = 0
+        local list = cache.skelPairs
+        for i = 1, #list do list[i].on = 0 end
         for _, line in pairs(v.skeleton) do line.Visible = false end
     end
 end
 
 local playerList = {}
 local function updatePlayerList()
-    local newList = Players:GetPlayers()
-    playerList = newList
+    playerList = Players:GetPlayers()
 end
 updatePlayerList()
 Players.PlayerAdded:Connect(updatePlayerList)
@@ -814,14 +1088,16 @@ Players.PlayerRemoving:Connect(function(player)
     updatePlayerList()
 end)
 
-local function getNearestPlayer(camera)
+local function getNearestPlayer(camPos)
     local nearest, nearestDistSq = nil, math.huge
-    for _, player in ipairs(playerList) do
+    for i = 1, #playerList do
+        local player = playerList[i]
         if player ~= LocalPlayer then
             local cache = playerCache[player]
-            if cache and cache.root and cache.humanoid and cache.humanoid.Health > 0 then
-                local offset = camera.CFrame.Position - cache.root.Position
-                local distSq = offset.X * offset.X + offset.Y * offset.Y + offset.Z * offset.Z
+            if cache and cache.root.Parent and cache.humanoid.Health > 0 then
+                local pos = cache.root.Position
+                local ox, oy, oz = pos.X - camPos.X, pos.Y - camPos.Y, pos.Z - camPos.Z
+                local distSq = ox * ox + oy * oy + oz * oz
                 if distSq < nearestDistSq then
                     nearestDistSq = distSq
                     nearest = player
@@ -832,18 +1108,33 @@ local function getNearestPlayer(camera)
     return nearest
 end
 
-local frameCount = 0
+local espLastT = 0
+
 local function updateEsp()
+    if (_G.cfgRev or 0) ~= espRev then
+        espRev = _G.cfgRev or 0
+        refreshEspCfg()
+    end
+
+    if not espCfg.active then return end
+
+    if ESP_MAX_FPS > 0 then
+        local t = clock()
+        if t - espLastT < 1 / ESP_MAX_FPS then return end
+        espLastT = t
+    end
+
     local camera = workspace.CurrentCamera
     if not camera then return end
 
-    frameCount = frameCount + 1
+    local cf = camera.CFrame
+    local camPos = cf.Position
+    local lookVec = cf.LookVector
+    local nearestPlayer = espCfg.tracerToNearPlayer and getNearestPlayer(camPos) or nil
+    local now = clock()
 
-    updateCachedColors()
-
-    local nearestPlayer = _G.Config.tracerToNearPlayer and getNearestPlayer(camera) or nil
-
-    for _, player in ipairs(playerList) do
+    for i = 1, #playerList do
+        local player = playerList[i]
         if player ~= LocalPlayer then
             local char = player.Character
             if char then
@@ -852,15 +1143,13 @@ local function updateEsp()
                     cacheCharacterParts(player, char)
                 end
             end
-            updatePlayer(camera, player, nearestPlayer)
+            updatePlayer(camera, player, nearestPlayer, camPos, lookVec, now)
         end
     end
+end
 
-    for player in pairs(visuals) do
-        if not Players:FindFirstChild(player.Name) then
-            cleanupPlayer(player)
-        end
-    end
+_G.ESP_REFRESH = function()
+    espRev = -1
 end
 
 local TweenService = game:GetService("TweenService")
@@ -1247,6 +1536,8 @@ function dash()
     canDash = true
 end
 
+local speedhackParams, speedhackParamsChar = nil, nil
+
 function speedhackStep()
     if not _G.Config.enableSpeedhack then return end
     local char, hum, root = getCharacterParts()
@@ -1256,9 +1547,13 @@ function speedhackStep()
     if not dir then return end
 
     local distance = _G.Config.speedhackValue
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = { char }
-    params.FilterType = Enum.RaycastFilterType.Blacklist
+    if speedhackParams == nil or speedhackParamsChar ~= char then
+        speedhackParamsChar = char
+        speedhackParams = RaycastParams.new()
+        speedhackParams.FilterDescendantsInstances = { char }
+        speedhackParams.FilterType = Enum.RaycastFilterType.Blacklist
+    end
+    local params = speedhackParams
 
     local hit = workspace:Raycast(root.Position, dir * distance, params)
     local targetPos = hit and (hit.Position - dir * 2) or (root.Position + dir * distance)
@@ -1365,10 +1660,12 @@ function aimAtTarget()
 end
 
 function uninstallSilentAimbot()
+    if _G.SA_APPLY then _G.SA_APPLY() end
 end
 
 function installSilentAimbot()
-    return true
+    if _G.SA_APPLY then _G.SA_APPLY() end
+    return _G.SilentAimbotInstalled == true
 end
 
 local Players = game:GetService("Players")
@@ -1514,12 +1811,28 @@ function startStandPilot()
     standRoot.CFrame = CFrame.lookAt(standPos, standPos + initialLook)
     root.CFrame = CFrame.new(standPos.X, standY - _G.Config.standPilotUnderground, standPos.Z)
 
+    local noclipParts = {}
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            noclipParts[#noclipParts + 1] = part
+        end
+    end
+    local noclipNextScan = 0
     noclipConn = RunService.Stepped:Connect(function()
         if not standPilotActive then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
+        local t = tick()
+        if t > noclipNextScan then
+            noclipNextScan = t + 0.5
+            local list = {}
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    list[#list + 1] = part
+                end
             end
+            noclipParts = list
+        end
+        for i = 1, #noclipParts do
+            noclipParts[i].CanCollide = false
         end
     end)
 
@@ -1787,10 +2100,19 @@ function startAutoSell()
     if backpackConn then
         backpackConn:Disconnect()
     end
-    backpackConn = game:GetService("RunService").RenderStepped:Connect(function()
-        if not _G.autoSell then return end
-        scanBackpack()
+    backpackConn = backpack.ChildAdded:Connect(function()
+        if _G.autoSell then
+            task.wait(0.1)
+            scanBackpack()
+        end
     end)
+    task.spawn(function()
+        while _G.autoSell do
+            scanBackpack()
+            task.wait(0.25)
+        end
+    end)
+    scanBackpack()
 end
 
 function stopAutoSell()
@@ -2249,22 +2571,49 @@ if Player.Character then
     pcall(function() setupCharacter(Player.Character) end)
 end
 
+local auraCache = setmetatable({}, { __mode = "k" })
+local auraState = { r = nil, g = nil, b = nil, hue = nil }
+
 function applyStandAura()
     if not _G.Config.standAuraEnabled then return end
     local model = livingModel()
     if not model then return end
 
-    local color
-    if _G.Config.standAuraRgb then
-        color = Color3.fromHSV((tick() % 2) / 2, 1, 1)
-    else
-        color = Color3.fromRGB(_G.Config.standAuraR, _G.Config.standAuraG, _G.Config.standAuraB)
+    local now = tick()
+    local cache = auraCache[model]
+    if cache and now - cache.built > 2 then
+        cache = nil
+    end
+    if not cache then
+        local emitters = {}
+        for _, obj in ipairs(model:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") and obj.Name:match("StandAura") then
+                emitters[#emitters + 1] = obj
+            end
+        end
+        cache = { emitters = emitters, built = now }
+        auraCache[model] = cache
     end
 
-    for _, obj in ipairs(model:GetDescendants()) do
-        if obj:IsA("ParticleEmitter") and obj.Name:match("StandAura") then
-            obj.Color = ColorSequence.new(color)
-        end
+    local color
+    if _G.Config.standAuraRgb then
+        local hue = (now % 2) / 2
+        local quantized = math.floor(hue * 40)
+        if auraState.hue == quantized and now - (auraState.written or 0) < 2 then return end
+        auraState.hue = quantized
+        color = Color3.fromHSV(quantized / 40, 1, 1)
+    else
+        local r, g, b = _G.Config.standAuraR, _G.Config.standAuraG, _G.Config.standAuraB
+        local changed = auraState.r ~= r or auraState.g ~= g or auraState.b ~= b
+        if not changed and now - (auraState.written or 0) < 2 then return end
+        auraState.r, auraState.g, auraState.b = r, g, b
+        color = Color3.fromRGB(r, g, b)
+    end
+
+    local seq = ColorSequence.new(color)
+    auraState.written = now
+    for i = 1, #cache.emitters do
+        cache.emitters[i].Color = seq
     end
 end
 
@@ -2986,39 +3335,72 @@ function flashPlayer(player)
     end)
 end
 
+local animCache = setmetatable({}, { __mode = "k" })
+local animCheckEvery = 0.1
+local lastAnimCheck = 0
+
+local function animatorFor(char)
+    local cached = animCache[char]
+    if cached ~= nil then
+        return cached or nil
+    end
+    local animator = false
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        animator = hum:FindFirstChild("Animator") or hum:FindFirstChildWhichIsA("Animator") or false
+    end
+    if not animator then
+        for _, child in ipairs(char:GetDescendants()) do
+            if child:IsA("Animator") then
+                animator = child
+                break
+            end
+        end
+    end
+    animCache[char] = animator
+    return animator or nil
+end
+
 function monitorAllPlayers()
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player == Players.LocalPlayer then
-            continue
-        end
+    local now = tick()
+    if now - lastAnimCheck < animCheckEvery then
+        return
+    end
+    lastAnimCheck = now
 
-        local char = player.Character
-        if not char then
-            if highlights[player] then
-                highlights[player].highlight:Destroy()
-                highlights[player] = nil
-                lastFlashTime[player] = nil
+    local players = Players:GetPlayers()
+    for i = 1, #players do
+        local player = players[i]
+        if player ~= Players.LocalPlayer then
+            local char = player.Character
+            if not char then
+                if highlights[player] then
+                    highlights[player].highlight:Destroy()
+                    highlights[player] = nil
+                    lastFlashTime[player] = nil
+                end
+                continue
             end
-            continue
-        end
 
-        local animator = findAnimator(char)
-        if not animator then
-            if highlights[player] then
-                cancelTween(highlights[player])
-                highlights[player].highlight.FillTransparency = 1
+            local animator = animatorFor(char)
+            if not animator then
+                local data = highlights[player]
+                if data then
+                    cancelTween(data)
+                    data.highlight.FillTransparency = 1
+                end
+                continue
             end
-            continue
-        end
 
-        local tracks = animator:GetPlayingAnimationTracks()
-
-        for _, track in ipairs(tracks) do
-            if track.IsPlaying then
-                local anim = track.Animation
-                if anim and (anim.AnimationId == "rbxassetid://4211804997" or anim.AnimationId == "rbxassetid://4095625816") then
-                    flashPlayer(player)
-                    break
+            local tracks = animator:GetPlayingAnimationTracks()
+            for t = 1, #tracks do
+                local track = tracks[t]
+                if track.IsPlaying then
+                    local anim = track.Animation
+                    if anim and (anim.AnimationId == "rbxassetid://4211804997" or anim.AnimationId == "rbxassetid://4095625816") then
+                        flashPlayer(player)
+                        break
+                    end
                 end
             end
         end
@@ -3055,7 +3437,7 @@ function oldBox()
         lastFlashTime[player] = nil
     end)
 
-    _G.conn5 = RunService.RenderStepped:Connect(monitorAllPlayers)
+    _G.conn5 = RunService.Heartbeat:Connect(monitorAllPlayers)
 end
 
 function breakOofSound()
@@ -3890,7 +4272,7 @@ end
 
 function checkAnimation()
     while true do
-        wait(0.01)
+        wait(0.08)
         if not _G.zxcursed then 
             warn('disabling...') 
             break 
@@ -4107,6 +4489,7 @@ addFunctionConnection(UserInputService.InputBegan:Connect(function(input, gp)
 
     if input.KeyCode == getKey("selectTarget") then
         _G.Config.input_TargetSurvName = findTargetInCircle()
+        _G.cfgRev = (_G.cfgRev or 0) + 1
     elseif input.KeyCode == getKey("dash") then
         dash()
     elseif input.KeyCode == getKey("speedhack") then
@@ -4136,18 +4519,34 @@ addFunctionConnection(UserInputService.InputEnded:Connect(function(input)
     end
 end))
 
+local circleLastX, circleLastY, circleRadius, circleVisible = nil, nil, nil, nil
+
 addFunctionConnection(RunService.RenderStepped:Connect(function()
     local cam = workspace.CurrentCamera
-    local mouseLocation = UserInputService:GetMouseLocation()
-    local inset = GuiService:GetGuiInset()
-    if _G.q_circle then
-        _G.q_circle.Position = Vector2.new(mouseLocation.X, mouseLocation.Y - inset.Y)
-        _G.q_circle.Radius = _G.Config.circleRadius
-        _G.q_circle.Visible = _G.Config.circle
-    end
-
     if cam then
         Camera = cam
+    end
+
+    local cfg = _G.Config
+    local circle = _G.q_circle
+
+    if circle then
+        local mouseLocation = UserInputService:GetMouseLocation()
+        local inset = GuiService:GetGuiInset()
+        local x, y = mouseLocation.X, mouseLocation.Y - inset.Y
+        if x ~= circleLastX or y ~= circleLastY then
+            circleLastX, circleLastY = x, y
+            circle.Position = Vector2.new(x, y)
+        end
+        if circleRadius ~= cfg.circleRadius then
+            circleRadius = cfg.circleRadius
+            circle.Radius = circleRadius
+        end
+        local wantVisible = cfg.circle == true
+        if circleVisible ~= wantVisible then
+            circleVisible = wantVisible
+            circle.Visible = wantVisible
+        end
     end
 
     aimAtTarget()
@@ -5936,86 +6335,92 @@ Library:CreateToggle(basicSettingsSection, "Show Stand & Spec", _G.Config.showSt
 
         _G.SPECESP_ENABLED = true
 
-        local MAX_DISTANCE = 80
+        local espLabels = {}
+        local standLabels = {}
+
+        local MAX_DISTANCE_SQ = 80 * 80
         local OFFSET_X = 60
         local OFFSET_Y = -32
         local LEFT_OFFSET_X = -120
         local IMAGE_SIZE = 64
+        local REFRESH_TIME = 0.5
 
         local specFolder = "ad/"
         local standFolder = "ad/"
 
-        local espLabels = {}
-        local standLabels = {}
+        local filesRescanEvery = 5
+        local lastFilesRescan = tick()
+
+        local espState = setmetatable({}, { __mode = "k" })
+        local assetCache = {}
+        local selfState = {}
 
         local function worldToScreen(pos)
-            local vec, onScreen = Camera:WorldToScreenPoint(pos)
+            local vec, onScreen = Camera.WorldToScreenPoint(Camera, pos)
             if not onScreen then return nil end
-            return Vector2.new(vec.X, vec.Y)
-        end
-
-        local function getValue(player, statName)
-            local stats = player:FindFirstChild("PlayerStats")
-            if not stats then return nil end
-            local value = stats:FindFirstChild(statName)
-            if not value then return nil end
-            return value.Value
+            return vec.X, vec.Y
         end
 
         local function normalize(str)
             if not str then return nil end
-            local s = str:lower()
-            s = s:gsub("%s+", "")
-            s = s:gsub("%-", "")
-            s = s:gsub(":", "")
-            s = s:gsub("%.", "")
-            s = s:gsub(",", "")
-            s = s:gsub("'", "")
-            s = s:gsub('"', "")
-            s = s:gsub("!", "")
-            s = s:gsub("%?", "")
-            s = s:gsub("_", "")
-            s = s:gsub("/", "")
-            s = s:gsub("\\", "")
-            return s
+            return (tostring(str):lower():gsub("[^%w]+", ""))
         end
 
         local cachedFiles = {}
 
         local function refreshFileCache()
-            cachedFiles = {}
-            local ok, files = pcall(listfiles, "ad")
-            if not ok or not files then return end
-            for _, fullPath in ipairs(files) do
-                local name = fullPath:match("([^/\\]+)%.png$")
-                if name then
-                    cachedFiles[#cachedFiles + 1] = name:lower()
+            local files = {}
+            local ok, list = pcall(listfiles, "ad")
+            if ok and list then
+                for _, fullPath in ipairs(list) do
+                    local name = fullPath:match("([^/\\]+)%.png$")
+                    if name then
+                        files[#files + 1] = name:lower()
+                    end
                 end
             end
-            table.sort(cachedFiles, function(a, b)
+            table.sort(files, function(a, b)
                 return #a > #b
             end)
+            cachedFiles = files
+            assetCache = {}
         end
 
         refreshFileCache()
 
         local function getAssetPath(folder, value)
-            if not value then return nil end
-            local normalized = normalize(value)
-            if not normalized or normalized == "" then return nil end
-
-            for _, fileName in ipairs(cachedFiles) do
-                if normalized:find(fileName, 1, true) then
-                    return folder .. fileName .. ".png"
-                end
+            if not value or value == "" then return nil end
+            local cacheKey = folder .. "|" .. value
+            local cached = assetCache[cacheKey]
+            if cached ~= nil then
+                return cached or nil
             end
 
-            return folder .. normalized .. ".png"
+            local result = false
+            local normalized = normalize(value)
+            if normalized and normalized ~= "" then
+                local matched
+                for i = 1, #cachedFiles do
+                    if normalized:find(cachedFiles[i], 1, true) then
+                        matched = folder .. cachedFiles[i] .. ".png"
+                        break
+                    end
+                end
+                local path = matched or (folder .. normalized .. ".png")
+                if isfile(path) then
+                    result = getcustomasset(path)
+                end
+            end
+            if result then
+                assetCache[cacheKey] = result
+            end
+            return result or nil
         end
 
         local function cleanupLabel(container, player)
-            if container[player] then
-                container[player]:Destroy()
+            local label = container[player]
+            if label then
+                label:Destroy()
                 container[player] = nil
             end
         end
@@ -6029,87 +6434,155 @@ Library:CreateToggle(basicSettingsSection, "Show Stand & Spec", _G.Config.showSt
             label.ScaleType = Enum.ScaleType.Fit
             label.Parent = ScreenGui
             container[player] = label
+            return label
         end
+
+        local function setSlot(label, url, x, y, state, slotKey)
+            if not label then return end
+            local appliedKey = slotKey .. "Applied"
+            if state[appliedKey] ~= url then
+                state[appliedKey] = url
+                if url then
+                    label.Image = url
+                end
+            end
+            if url then
+                if state[slotKey .. "X"] ~= x or state[slotKey .. "Y"] ~= y then
+                    state[slotKey .. "X"] = x
+                    state[slotKey .. "Y"] = y
+                    label.Position = UDim2.fromOffset(x, y)
+                end
+                if state[slotKey .. "Vis"] ~= true then
+                    state[slotKey .. "Vis"] = true
+                    label.Visible = true
+                end
+            elseif state[slotKey .. "Vis"] ~= false then
+                state[slotKey .. "Vis"] = false
+                label.Visible = false
+            end
+        end
+
+        local allHidden = false
 
         local function updateEZP()
             if not _G.SPECESP_ENABLED then
-                for _, label in pairs(espLabels) do
-                    label.Visible = false
-                end
-                for _, label in pairs(standLabels) do
-                    label.Visible = false
+                if not allHidden then
+                    allHidden = true
+                    for _, label in pairs(espLabels) do label.Visible = false end
+                    for _, label in pairs(standLabels) do label.Visible = false end
+                    espState = setmetatable({}, { __mode = "k" })
                 end
                 return
             end
 
+            local now = tick()
+            Camera = workspace.CurrentCamera
+            if not Camera then return end
+
             local myChar = LocalPlayer.Character
-            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myChar ~= selfState.char then
+                selfState.char = myChar
+                selfState.root = myChar and myChar:FindFirstChild("HumanoidRootPart") or nil
+            end
+            local myRoot = selfState.root
+            local mx, my, mz
+            if myRoot then
+                local p = myRoot.Position
+                mx, my, mz = p.X, p.Y, p.Z
+            end
 
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player == LocalPlayer then continue end
+            local players = Players:GetPlayers()
+            for i = 1, #players do
+                local player = players[i]
+                if player ~= LocalPlayer then
+                    local state = espState[player]
+                    if not state then
+                        state = {}
+                        espState[player] = state
+                    end
 
-                if not espLabels[player] then
-                    createLabel(espLabels, player)
-                end
-                if not standLabels[player] then
-                    createLabel(standLabels, player)
-                end
+                    local specLabel = espLabels[player]
+                    if not specLabel then
+                        specLabel = createLabel(espLabels, player)
+                        standLabels[player] = createLabel(standLabels, player)
+                        state = {}
+                        espState[player] = state
+                        state.next = 0
+                    end
+                    local standLabel = standLabels[player]
 
-                local specLabel = espLabels[player]
-                local standLabel = standLabels[player]
-
-                local character = player.Character
-                if not character then
-                    specLabel.Visible = false
-                    standLabel.Visible = false
-                    continue
-                end
-
-                local root = character:FindFirstChild("HumanoidRootPart")
-                if not root then
-                    specLabel.Visible = false
-                    standLabel.Visible = false
-                    continue
-                end
-
-                if myRoot then
-                    local dist = (root.Position - myRoot.Position).Magnitude
-                    if dist > MAX_DISTANCE then
-                        specLabel.Visible = false
-                        standLabel.Visible = false
+                    local character = player.Character
+                    if state.char ~= character then
+                        state.char = character
+                        state.root = character and character:FindFirstChild("HumanoidRootPart") or nil
+                    end
+                    local root = state.root
+                    if not root or not root.Parent then
+                        setSlot(specLabel, nil, 0, 0, state, "spec")
+                        setSlot(standLabel, nil, 0, 0, state, "stand")
                         continue
                     end
-                end
 
-                local screenPos = worldToScreen(root.Position)
-                if not screenPos then
-                    specLabel.Visible = false
-                    standLabel.Visible = false
-                    continue
-                end
+                    if mx then
+                        local p = root.Position
+                        local dx, dy, dz = p.X - mx, p.Y - my, p.Z - mz
+                        if dx * dx + dy * dy + dz * dz > MAX_DISTANCE_SQ then
+                            setSlot(specLabel, nil, 0, 0, state, "spec")
+                            setSlot(standLabel, nil, 0, 0, state, "stand")
+                            continue
+                        end
+                    end
 
-                local specValue = getValue(player, "Spec")
-                local specPath = getAssetPath(specFolder, specValue)
-                if specPath and isfile(specPath) then
-                    specLabel.Image = getcustomasset(specPath)
-                    specLabel.Size = UDim2.fromOffset(IMAGE_SIZE, IMAGE_SIZE)
-                    specLabel.Position = UDim2.fromOffset(screenPos.X + OFFSET_X, screenPos.Y + OFFSET_Y)
-                    specLabel.Visible = true
-                else
-                    specLabel.Visible = false
-                end
+                    local sx, sy = worldToScreen(root.Position)
+                    if not sx then
+                        setSlot(specLabel, nil, 0, 0, state, "spec")
+                        setSlot(standLabel, nil, 0, 0, state, "stand")
+                        continue
+                    end
 
-                local standValue = getValue(player, "Stand")
-                local standPath = getAssetPath(standFolder, standValue)
-                if standPath and isfile(standPath) then
-                    standLabel.Image = getcustomasset(standPath)
-                    standLabel.Size = UDim2.fromOffset(IMAGE_SIZE, IMAGE_SIZE)
-                    standLabel.Position = UDim2.fromOffset(screenPos.X + LEFT_OFFSET_X, screenPos.Y + OFFSET_Y)
-                    standLabel.Visible = true
-                else
-                    standLabel.Visible = false
+                    if now >= (state.next or 0) then
+                        state.next = now + REFRESH_TIME
+                        if now - lastFilesRescan > filesRescanEvery then
+                            lastFilesRescan = now
+                            refreshFileCache()
+                        end
+                        if not root or not root.Parent then
+                            state.root = character and character:FindFirstChild("HumanoidRootPart") or nil
+                            root = state.root
+                        end
+                        if myRoot and not myRoot.Parent then
+                            selfState.root = nil
+                        end
+                        local stats = player:FindFirstChild("PlayerStats")
+                        if stats ~= state.stats then
+                            state.stats = stats
+                            state.spec = stats and stats:FindFirstChild("Spec") or nil
+                            state.stand = stats and stats:FindFirstChild("Stand") or nil
+                            state.specKey = nil
+                            state.standKey = nil
+                        end
+                        if state.stats then
+                            local specValue = state.spec and state.spec.Value
+                            if specValue ~= state.specKey then
+                                state.specKey = specValue
+                                state.specUrl = specValue and getAssetPath(specFolder, specValue) or nil
+                            end
+                            local standValue = state.stand and state.stand.Value
+                            if standValue ~= state.standKey then
+                                state.standKey = standValue
+                                state.standUrl = standValue and getAssetPath(standFolder, standValue) or nil
+                            end
+                        else
+                            state.specUrl = nil
+                            state.standUrl = nil
+                        end
+                    end
+
+                    setSlot(specLabel, state.specUrl, sx + OFFSET_X, sy + OFFSET_Y, state, "spec")
+                    setSlot(standLabel, state.standUrl, sx + LEFT_OFFSET_X, sy + OFFSET_Y, state, "stand")
                 end
             end
+            allHidden = false
         end
 
         _G.SPECESP_CLEAR = function()
@@ -6121,6 +6594,9 @@ Library:CreateToggle(basicSettingsSection, "Show Stand & Spec", _G.Config.showSt
             end
             espLabels = {}
             standLabels = {}
+            espState = setmetatable({}, { __mode = "k" })
+            assetCache = {}
+            allHidden = false
         end
 
         if _G.rqrqr1 then
@@ -6225,42 +6701,112 @@ Library:CreateToggle(basicSettingsSection, "Show Attacks", _G.Config.showAttacks
             playerFX[player] = nil
         end)
         local espObjects = {}
+        local espState = {}
+        local espRoots = {}
+        local espHidden = false
+        local espColor, espColorRev = nil, -1
+        local BLACK_FX = Color3.fromRGB(0, 0, 0)
+        local lastRootScan = 0
+
         local function clearESP()
-            for _, obj in pairs(espObjects) do
+            for player, obj in pairs(espObjects) do
                 obj:Remove()
+                espObjects[player] = nil
+                espState[player] = nil
             end
-            espObjects = {}
+            espRoots = {}
         end
-        local function worldToScreen(pos)
-            local vec, onScreen = Camera:WorldToScreenPoint(pos)
-            if not onScreen then return nil end
-            return Vector2.new(vec.X, vec.Y)
+
+        local function ensureEspText(player)
+            local obj = espObjects[player]
+            if not obj then
+                obj = Drawing.new("Text")
+                obj.Size = 16
+                obj.Center = true
+                obj.Outline = true
+                obj.OutlineColor = BLACK_FX
+                obj.Visible = false
+                espObjects[player] = obj
+            end
+            return obj
         end
+
         local function drawESP()
-            clearESP()
-            if not _G.FXESP_ENABLED then return end
+            if not _G.FXESP_ENABLED then
+                if not espHidden then
+                    espHidden = true
+                    for _, obj in pairs(espObjects) do
+                        if obj.Visible then obj.Visible = false end
+                    end
+                end
+                return
+            end
+            espHidden = false
+
             local now = tick()
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local w2s = cam.WorldToScreenPoint
+
+            local rev = _G.cfgRev or 0
+            if espColorRev ~= rev then
+                espColorRev = rev
+                espColor = Color3.fromRGB(_G.Config.saR, _G.Config.saG, _G.Config.saB)
+            end
+
+            if now - lastRootScan > 0.25 then
+                lastRootScan = now
+                for player in pairs(playerFX) do
+                    local char = player.Character
+                    espRoots[player] = (char and char:FindFirstChild("HumanoidRootPart")) or false
+                end
+            end
+
             for player, fxData in pairs(playerFX) do
                 if now - fxData.time > 1 then
                     playerFX[player] = nil
+                    local obj = espObjects[player]
+                    if obj and obj.Visible then obj.Visible = false end
                     continue
                 end
-                if not player.Character then continue end
-                local root = player.Character:FindFirstChild("HumanoidRootPart")
-                if not root then continue end
-                local feetPos = root.Position - Vector3.new(0, 3, 0)
-                local screenPos = worldToScreen(feetPos)
-                if not screenPos then continue end
-                local text = Drawing.new("Text")
-                text.Text = fxData.name
-                text.Position = Vector2.new(screenPos.X, screenPos.Y + 90)
-                text.Color = Color3.fromRGB(_G.Config.saR,_G.Config.saG,_G.Config.saB)
-                text.Size = 16
-                text.Center = true
-                text.Outline = true
-                text.OutlineColor = Color3.fromRGB(0, 0, 0)
-                text.Visible = true
-                table.insert(espObjects, text)
+
+                local root = espRoots[player]
+                if root == nil then
+                    local pc = player.Character
+                    root = (pc and pc:FindFirstChild("HumanoidRootPart")) or false
+                    espRoots[player] = root
+                end
+                if not root or not root.Parent then
+                    local obj = espObjects[player]
+                    if obj and obj.Visible then obj.Visible = false end
+                    continue
+                end
+
+                local pos = root.Position
+                local vec, onScreen = w2s(cam, Vector3.new(pos.X, pos.Y - 3, pos.Z))
+                if not onScreen or vec.Z <= 0 then
+                    local obj = espObjects[player]
+                    if obj and obj.Visible then obj.Visible = false end
+                    continue
+                end
+
+                local obj = ensureEspText(player)
+                local st = espState[player]
+                if not st then
+                    st = {}
+                    espState[player] = st
+                end
+                if st.text ~= fxData.name then
+                    st.text = fxData.name
+                    obj.Text = fxData.name
+                    obj.Color = espColor
+                end
+                local px, py = vec.X, vec.Y + 90
+                if st.x ~= px or st.y ~= py then
+                    st.x, st.y = px, py
+                    obj.Position = Vector2.new(px, py)
+                end
+                if not obj.Visible then obj.Visible = true end
             end
         end
         _G.bigcock3 = RunService.RenderStepped:Connect(drawESP)
@@ -6462,14 +7008,16 @@ Library:CreateToggle(movementSection, "Auto Sprint", _G.Config.enableAutoSprint,
             local v00029 = game:GetService("Players").LocalPlayer.Character.RemoteFunction
             v00029:InvokeServer("ToggleSprinting")
         end
-        _G.lllbozo = game:GetService("RunService").RenderStepped:Connect(function()
+        local lastSprintCheck = 0
+        _G.lllbozo = game:GetService("RunService").Heartbeat:Connect(function()
+            local t = tick()
+            if t - lastSprintCheck < 0.1 then return end
+            lastSprintCheck = t
             local v349 = game:GetService("Players").LocalPlayer.Character
             if v349 then
-                local v123 = v349.Humanoid
-                if v123 then
-                    if v123.WalkSpeed <= 16 then
-                        v12539122294(v123.WalkSpeed)
-                    end
+                local v123 = v349:FindFirstChildOfClass("Humanoid")
+                if v123 and v123.WalkSpeed <= 16 then
+                    v12539122294(v123.WalkSpeed)
                 end
             end
         end)
@@ -6487,18 +7035,28 @@ Library:CreateToggle(movementSection, "Auto Summon Stand", _G.Config.autoSumStan
         if _G.paragonpidor then
             _G.paragonpidor:Disconnect()
         end
-        _G.paragonpidor = game:GetService("RunService").RenderStepped:Connect(function()
-            local p = game:GetService("Players").LocalPlayer.Character
-            if p then
-                local ss = p.SummonedStand
-                if not ss.Value then
-                    local cv = game:GetService("Players").LocalPlayer.Character.RemoteFunction
+        local function trySummonStand()
+            local plr = game:GetService("Players").LocalPlayer
+            local p = plr.Character
+            if not p then return end
+            local ss = p:FindFirstChild("SummonedStand")
+            if not ss then return end
+            if not ss.Value then
+                local cv = p:FindFirstChild("RemoteFunction")
+                if cv then
                     cv:InvokeServer(
                         "ToggleStand",
                         "Toggle"
                     )
                 end
             end
+        end
+        local lastSummonCheck = 0
+        _G.paragonpidor = game:GetService("RunService").Heartbeat:Connect(function()
+            local t = tick()
+            if t - lastSummonCheck < 0.25 then return end
+            lastSummonCheck = t
+            trySummonStand()
         end)
     else
         if _G.paragonpidor then
@@ -7291,22 +7849,76 @@ game:GetService("UserInputService").InputBegan:Connect(function(inp, gp)
         _G.crackeSandwichCD = true
 	end
 end)
-hookmetamethod(game, "__namecall", function(self, ...)
+local filterHooked = false
+local filterInert = true
+local filterOldNamecall = nil
+local filterWrapped = nil
+local remoteClassMemo = setmetatable({}, { __mode = "k" })
+
+local function filterCurrentNamecall()
+    if not getrawmetatable then return nil end
+    local ok, mt = pcall(getrawmetatable, game)
+    if ok and mt then return rawget(mt, "__namecall") end
+    return nil
+end
+
+local function isRemoteInstance(self)
+    local cached = remoteClassMemo[self]
+    if cached == nil then
+        cached = self:IsA("RemoteEvent") or self:IsA("RemoteFunction")
+        remoteClassMemo[self] = cached
+    end
+    return cached
+end
+
+local function filteredNamecall(self, ...)
+    if filterInert then
+        return filterOldNamecall(self, ...)
+    end
     local method = getnamecallmethod()
-    local args = {...}
-
-    if (method == "FireServer" or method == "InvokeServer") then
-        if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
-            local cmd = args[1]
-            local data = args[2]
-
-            if (cmd == "InputBegan" and type(data) == "table" and data.Input == Enum.KeyCode.C and _G.Config.enableBoxModify and pidoras_ebaniy()) or (cmd == "Dash" and _G.Config.fakeDashEnabled) then
-                return  
+    if (method == "FireServer" or method == "InvokeServer") and isRemoteInstance(self) then
+        local cmd = select(1, ...)
+        if cmd == "InputBegan" then
+            local data = select(2, ...)
+            if type(data) == "table" and data.Input == Enum.KeyCode.C
+                and _G.Config.enableBoxModify and pidoras_ebaniy() then
+                return
             end
+        elseif cmd == "Dash" and _G.Config.fakeDashEnabled then
+            return
         end
     end
-    return self[method](self, ...)
-end)
+    return filterOldNamecall(self, ...)
+end
+
+function syncRemoteFilter()
+    local want = _G.Config.enableBoxModify == true or _G.Config.fakeDashEnabled == true
+    if want then
+        if not filterHooked then
+            filterHooked = true
+            filterInert = false
+            filterWrapped = newcclosure(filteredNamecall)
+            local prev = hookmetamethod(game, "__namecall", filterWrapped)
+            filterOldNamecall = (type(prev) == "function") and prev or function(_, ...) return ... end
+        else
+            filterInert = false
+        end
+    elseif filterHooked then
+        local head = filterCurrentNamecall()
+        if head == nil or head == filterWrapped then
+            filterHooked = false
+            filterInert = true
+            pcall(unhookmetamethod, game, "__namecall", filterOldNamecall)
+            filterOldNamecall = nil
+            filterWrapped = nil
+        else
+            filterInert = true
+        end
+    end
+end
+
+_G.SYNC_REM_FILTER = syncRemoteFilter
+pcall(syncRemoteFilter)
 
 local miscSection = Library:CreateFunctionTab(tab_functions, "Misc")
 Library:CreateToggle(miscSection, "Enable Aimbot", _G.Config.enableAimbot, function(v)
@@ -7475,67 +8087,152 @@ Library:CreateDropdown(visualsSection, "Change Lighting", weathers, _G.Config.le
     end
     SaveConfig()
 end)
+local function findHudChild(...)
+    local node = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not node then return nil end
+    for _, name in ipairs({ ... }) do
+        node = node:FindFirstChild(name)
+        if not node then return nil end
+    end
+    return node
+end
+
+local function keepFlag(path, flag)
+    local state = { conn = nil, rebind = nil, target = nil }
+
+    local function bind()
+        local inst = findHudChild(table.unpack(path))
+        if inst == state.target then return end
+        state.target = inst
+        if state.conn then state.conn:Disconnect() state.conn = nil end
+        if not inst then return end
+        if inst.Visible ~= flag then inst.Visible = flag end
+        state.conn = inst:GetPropertyChangedSignal("Visible"):Connect(function()
+            if inst.Visible ~= flag then inst.Visible = flag end
+        end)
+    end
+
+    state.alive = true
+    bind()
+    task.spawn(function()
+        while state.alive do
+            task.wait(1)
+            if not state.target or not state.target.Parent then bind() end
+        end
+    end)
+
+    return function()
+        state.alive = false
+        if state.conn then state.conn:Disconnect() state.conn = nil end
+    end
+end
+
 Library:CreateToggle(visualsSection, "Remove Stand's Barrage", _G.Config.removeBarrage, function(val)
     _G.Config.removeBarrage = val
     if _G.z then
         _G.z:Disconnect()
+        _G.z = nil
     end
     if val then
-        _G.z = game:GetService("RunService").RenderStepped:Connect(function()
-            for _, child in ipairs(game:GetService("ReplicatedStorage"):GetChildren()) do
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local function killBarrage()
+            for _, child in ipairs(ReplicatedStorage:GetChildren()) do
                 if child.ClassName == "Model" and child.Name == "Model" then
                     child:Destroy()
                 end
             end
-        end)
+        end
+        killBarrage()
+        _G.z = ReplicatedStorage.ChildAdded:Connect(killBarrage)
     end
     SaveConfig()
 end)
 Library:CreateToggle(removalsSection, "Mobile UI", _G.Config.mobileUi, function(val)
     _G.Config.mobileUi = val
-    if _G.mbbbz then _G.mbbbz:Disconnect() end
+    if _G.mbbbz then
+        if type(_G.mbbbz) == "function" then
+            pcall(_G.mbbbz)
+        else
+            pcall(function() _G.mbbbz:Disconnect() end)
+        end
+        _G.mbbbz = nil
+    end
     if val then
-    _G.mbbbz = game:GetService("RunService").RenderStepped:Connect(function()
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.MobileSupport.Visible = true
-    end)
+        _G.mbbbz = keepFlag({ "HUD", "Main", "MobileSupport" }, true)
     else
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.MobileSupport.Visible = false
+        local inst = findHudChild("HUD", "Main", "MobileSupport")
+        if inst then inst.Visible = false end
     end
     SaveConfig()
 end)
 Library:CreateToggle(removalsSection, "Hide UI", _G.Config.hideUi, function(val)
     _G.Config.hideUi = val
-    if _G.mbbbz1 then _G.mbbbz1:Disconnect() end
+    if _G.mbbbz1 then
+        if type(_G.mbbbz1) == "function" then
+            pcall(_G.mbbbz1)
+        else
+            pcall(function() _G.mbbbz1:Disconnect() end)
+        end
+        _G.mbbbz1 = nil
+    end
     if val then
-    _G.mbbbz1 = game:GetService("RunService").RenderStepped:Connect(function()
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.Visible = false
-    end)
+        _G.mbbbz1 = keepFlag({ "HUD", "Main" }, false)
     else
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Main.Visible = true
+        local inst = findHudChild("HUD", "Main")
+        if inst then inst.Visible = true end
     end
     SaveConfig()
 end)
 Library:CreateToggle(removalsSection, "Hide Playerlist", _G.Config.hidePlayerlist, function(val)
     _G.Config.hidePlayerlist = val
-    if _G.mbbbz2 then _G.mbbbz2:Disconnect() end
+    if _G.mbbbz2 then
+        if type(_G.mbbbz2) == "function" then
+            pcall(_G.mbbbz2)
+        else
+            pcall(function() _G.mbbbz2:Disconnect() end)
+        end
+        _G.mbbbz2 = nil
+    end
     if val then
-    _G.mbbbz2 = game:GetService("RunService").RenderStepped:Connect(function()
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Playerlist.Visible = false
-    end)
+        _G.mbbbz2 = keepFlag({ "HUD", "Playerlist" }, false)
     else
-        game:GetService("Players").LocalPlayer.PlayerGui.HUD.Playerlist.Visible = true
+        local inst = findHudChild("HUD", "Playerlist")
+        if inst then inst.Visible = true end
     end
     SaveConfig()
 end)
 Library:CreateToggle(removalsSection, "Hide Attack's Blur", _G.Config.hideBlur, function(val)
     _G.Config.hideBlur = val
-    if _G.mbbbz3 then _G.mbbbz3:Disconnect() end
+    if _G.mbbbz3 then
+        if type(_G.mbbbz3) == "function" then
+            pcall(_G.mbbbz3)
+        else
+            pcall(function() _G.mbbbz3:Disconnect() end)
+        end
+        _G.mbbbz3 = nil
+    end
     if val then
-    _G.mbbbz3 = game:GetService("RunService").RenderStepped:Connect(function()
-    pcall(function() game:GetService("Players").LocalPlayer.PlayerGui.HurtGui:Destroy() end)
-    pcall(function() game:GetService("Lighting").EyeGougeHit:Destroy() end)
-    pcall(function() game:GetService("Lighting").Bloom:Destroy() end)
-    end)
+        local PlayerGui = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local Lighting = game:GetService("Lighting")
+        local function killBlur(container, names)
+            for _, name in ipairs(names) do
+                local obj = container:FindFirstChild(name)
+                if obj then
+                    pcall(function() obj:Destroy() end)
+                end
+            end
+        end
+        local function hook()
+            if PlayerGui then killBlur(PlayerGui, { "HurtGui" }) end
+            killBlur(Lighting, { "EyeGougeHit", "Bloom" })
+        end
+        hook()
+        local conns = {}
+        if PlayerGui then conns[#conns + 1] = PlayerGui.ChildAdded:Connect(hook) end
+        conns[#conns + 1] = Lighting.ChildAdded:Connect(hook)
+        _G.mbbbz3 = { Disconnect = function(self)
+            for _, c in ipairs(conns) do c:Disconnect() end
+        end }
     end
     SaveConfig()
 end)
@@ -7907,22 +8604,32 @@ Library:CreateDropdown(skinChangerSection, "Gloves Skin", itemSkinsList, _G.Conf
     SaveConfig()
 end)
 
-
 if _G.miscVisualConn then
     _G.miscVisualConn:Disconnect()
 end
-_G.miscVisualConn = RunService.RenderStepped:Connect(function()
-    Lighting.ClockTime = _G.Config.clocktime
-    if _G.Config.leghtink and _G.Config.leghtink ~= "..." then
-        pcall(function()
-            local workWeather = workspace:FindFirstChild("Weather")
-            if workWeather then
-                workWeather.Value = _G.Config.leghtink
+do
+    local weatherObj, lastTickRun = nil, 0
+    _G.miscVisualConn = RunService.Heartbeat:Connect(function()
+        local clock = _G.Config.clocktime
+        if clock and clock ~= "" and Lighting.ClockTime ~= clock then
+            Lighting.ClockTime = clock
+        end
+
+        local weather = _G.Config.leghtink
+        if weather and weather ~= "..." then
+            if not weatherObj or not weatherObj.Parent then
+                weatherObj = workspace:FindFirstChild("Weather")
             end
-        end)
-    end
-    applyStandAura()
-end)
+            if weatherObj and weatherObj.Value ~= weather then
+                pcall(function()
+                    weatherObj.Value = weather
+                end)
+            end
+        end
+
+        applyStandAura()
+    end)
+end
 
 -- PLAYERS INFO TAB
 local tab_playersInfo = Library:CreateClass("Players Info")
@@ -9466,233 +10173,348 @@ skinChangerCharacterConnection = player.CharacterAdded:Connect(function()
     ApplyGloveSkinWhenReady()
 end)
 
-local succ, err = pcall(function()
-    -- init
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
+if not syn or not protectgui then
+    getgenv().protectgui = function() end
+end
+
+local silentAimbot = nil
+local saReinstalls = 0
+
+local function saCurrentMetamethod(name)
+    if not getrawmetatable then return nil end
+    local ok, mt = pcall(getrawmetatable, game)
+    if ok and mt then
+        return rawget(mt, name)
+    end
+    return nil
+end
+
+local function saProbeAlive(state)
+    state.probeNC = 0
+    state.probeIdx = 0
+    state.probing = true
+    local ok = pcall(function()
+        pcall(function()
+            workspace:Raycast(Vector3.new(0, 1e5, 0), Vector3.new(0, 1, 0))
+        end)
+        local _probe = state.mouse and state.mouse.X
+    end)
+    state.probing = false
+    if not ok then return nil, nil end
+    return (state.probeNC or 0) > 0, (state.probeIdx or 0) > 0
+end
+
+local function saPresent(state)
+    if not state or not state.wrappedNamecall then return false, false end
+
+    local curN = saCurrentMetamethod("__namecall")
+    local curI = saCurrentMetamethod("__index")
+
+    if curN == state.wrappedNamecall and curI == state.wrappedIndex then
+        return true, true
+    end
+    if curN == nil and curI == nil then
+        return true, true
     end
 
-    if not syn or not protectgui then
-        getgenv().protectgui = function() end
+    local ncAlive, idxAlive = saProbeAlive(state)
+    if ncAlive == nil then
+        return true, false
+    end
+    return (ncAlive and idxAlive) == true, false
+end
+
+local function removeSilentAimbotHooks(state)
+    if state.namecall then
+        pcall(unhookmetamethod, game, "__namecall", state.namecall)
+    end
+    if state.index then
+        pcall(unhookmetamethod, game, "__index", state.index)
+    end
+    if state.velConn then
+        pcall(function() state.velConn:Disconnect() end)
+    end
+end
+
+local function installSilentAimbotImpl()
+    if silentAimbot then
+        local present = saPresent(silentAimbot)
+        if present then
+            silentAimbot.inert = false
+            return true
+        end
+        local dead = silentAimbot
+        dead.inert = true
+        pcall(removeSilentAimbotHooks, dead)
+        silentAimbot = nil
     end
 
-    local Camera = workspace.CurrentCamera
-    local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local GuiService = game:GetService("GuiService")
-    local UserInputService = game:GetService("UserInputService")
+    local ok, err = pcall(function()
+        local Players = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+        local RunService = game:GetService("RunService")
+        local Camera = workspace.CurrentCamera
+        local Mouse = LocalPlayer:GetMouse()
 
-    local LocalPlayer = Players.LocalPlayer
-    local Mouse = LocalPlayer:GetMouse()
+        local GetPlayers = Players.GetPlayers
+        local WorldToScreen = Camera.WorldToScreenPoint
+        local FindFirstChild = game.FindFirstChild
+        local unpackFn = unpack or table.unpack
 
-    local GetPlayers = Players.GetPlayers
-    local WorldToScreen = Camera.WorldToScreenPoint
-    local WorldToViewportPoint = Camera.WorldToViewportPoint
-    local GetPartsObscuringTarget = Camera.GetPartsObscuringTarget
-    local FindFirstChild = game.FindFirstChild
-    local RenderStepped = RunService.RenderStepped
-    local GuiInset = GuiService.GetGuiInset
-    local GetMouseLocation = UserInputService.GetMouseLocation
+        local state = {}
+        local targetVelocities = {}
+        local targetLastPositions = {}
+        state.inert = false
+        state.mouse = Mouse
 
-    local ValidTargetParts = {"Head", "HumanoidRootPart"}
-
-    local ExpectedArguments = {
-        Raycast = {
-            ArgCountRequired = 3,
-            Args = {
-                "Instance", "Vector3", "Vector3", "RaycastParams"
+        local ExpectedArguments = {
+            Raycast = {
+                ArgCountRequired = 3,
+                Args = { "Instance", "Vector3", "Vector3", "RaycastParams" }
             }
         }
-    }
 
-    local targetVelocities = {}
-    local targetLastPositions = {}
-
-    RunService.RenderStepped:Connect(function(deltaTime)
-        for _, player in next, GetPlayers(Players) do
-            if player == LocalPlayer then continue end
-            local character = player.Character
-            if character then
-                local root = character:FindFirstChild("HumanoidRootPart")
-                if root then
-                    if targetLastPositions[player] then
-                        targetVelocities[player] = (root.Position - targetLastPositions[player]) / math.max(deltaTime, 0.001)
-                    end
-                    targetLastPositions[player] = root.Position
+        local function ValidateArguments(Args, RayMethod)
+            local Matches = 0
+            if #Args < RayMethod.ArgCountRequired then
+                return false
+            end
+            for Pos, Argument in next, Args do
+                if typeof(Argument) == RayMethod.Args[Pos] then
+                    Matches = Matches + 1
                 end
             end
-        end
-    end)
-
-    local function createTracer(startPos, endPos)
-        local beam = Instance.new("Beam")
-        beam.Width0 = 0.08
-        beam.Width1 = 0.08
-        beam.FaceCamera = true
-        beam.Color = ColorSequence.new(Color3.fromRGB(0, 255, 0))
-        beam.Transparency = NumberSequence.new(0)
-        beam.LightEmission = 1
-        beam.LightInfluence = 0
-
-        local attach0 = Instance.new("Attachment")
-        attach0.WorldPosition = startPos
-        attach0.Parent = workspace.Terrain
-
-        local attach1 = Instance.new("Attachment")
-        attach1.WorldPosition = endPos
-        attach1.Parent = workspace.Terrain
-
-        beam.Attachment0 = attach0
-        beam.Attachment1 = attach1
-        beam.Parent = workspace.Terrain
-
-        task.delay(3.5, function()
-            beam:Destroy()
-            attach0:Destroy()
-            attach1:Destroy()
-        end)
-    end
-
-    local function getPositionOnScreen(Vector)
-        local Vec3, OnScreen = WorldToScreen(Camera, Vector)
-        return Vector2.new(Vec3.X, Vec3.Y), OnScreen
-    end
-
-    local function ValidateArguments(Args, RayMethod)
-        local Matches = 0
-        if #Args < RayMethod.ArgCountRequired then
-            return false
-        end
-        for Pos, Argument in next, Args do
-            if typeof(Argument) == RayMethod.Args[Pos] then
-                Matches = Matches + 1
-            end
-        end
-        return Matches >= RayMethod.ArgCountRequired
-    end
-
-    local function getDirection(Origin, Position)
-        return (Position - Origin).Unit * 1000
-    end
-
-    local function getMousePosition()
-        return GetMouseLocation(UserInputService)
-    end
-
-    local function IsPlayerVisible(Player)
-        local PlayerCharacter = Player.Character
-        local LocalPlayerCharacter = LocalPlayer.Character
-
-        if not (PlayerCharacter or LocalPlayerCharacter) then return end
-
-        local PlayerRoot = FindFirstChild(PlayerCharacter, "HumanoidRootPart")
-
-        if not PlayerRoot then return end
-
-        local CastPoints, IgnoreList = {PlayerRoot.Position, LocalPlayerCharacter, PlayerCharacter}, {LocalPlayerCharacter, PlayerCharacter}
-        local ObscuringObjects = #GetPartsObscuringTarget(Camera, CastPoints, IgnoreList)
-
-        return ((ObscuringObjects == 0 and true) or (ObscuringObjects > 0 and false))
-    end
-
-    local function getClosestTarget()
-        if not _G.Config.SilentAimbotEnabled then return nil, nil end
-
-        local closestPart = nil
-        local closestPlayer = nil
-        local closestDist = _G.Config.SilentAimbotFOV or 250
-
-        local screenCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-
-        for _, Player in next, GetPlayers(Players) do
-            if Player == LocalPlayer then continue end
-
-            local Character = Player.Character
-            if not Character then continue end
-
-            local HumanoidRootPart = FindFirstChild(Character, "HumanoidRootPart")
-            local Humanoid = FindFirstChild(Character, "Humanoid")
-            if not HumanoidRootPart or not Humanoid or Humanoid.Health <= 0 then continue end
-
-            local screenPos, onScreen = getPositionOnScreen(HumanoidRootPart.Position)
-            if not onScreen then continue end
-
-            local dist = (screenPos - screenCenter).Magnitude
-            if dist < closestDist then
-                closestDist = dist
-                closestPart = HumanoidRootPart
-                closestPlayer = Player
-            end
+            return Matches >= RayMethod.ArgCountRequired
         end
 
-        return closestPart, closestPlayer
-    end
+        local function getDirection(Origin, Position)
+            return (Position - Origin).Unit * 1000
+        end
 
-    local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(...)
-        local Method = getnamecallmethod()
-        local Arguments = {...}
-        local self = Arguments[1]
+        local function createTracer(startPos, endPos)
+            local beam = Instance.new("Beam")
+            beam.Width0 = 0.08
+            beam.Width1 = 0.08
+            beam.FaceCamera = true
+            beam.Color = ColorSequence.new(Color3.fromRGB(0, 255, 0))
+            beam.Transparency = NumberSequence.new(0)
+            beam.LightEmission = 1
+            beam.LightInfluence = 0
 
-        if self == workspace and not checkcaller() then
-            if Method == "Raycast" then
-                if _G.Config.SilentAimbotEnabled and _G.Config.SilentAimbotBulletDelay and _G.Config.SilentAimbotBulletDelay > 0 then
-                    task.wait(_G.Config.SilentAimbotBulletDelay)
-                end
+            local attach0 = Instance.new("Attachment")
+            attach0.WorldPosition = startPos
+            attach0.Parent = workspace.Terrain
 
-                if ValidateArguments(Arguments, ExpectedArguments.Raycast) then
-                    local A_Origin = Arguments[2]
+            local attach1 = Instance.new("Attachment")
+            attach1.WorldPosition = endPos
+            attach1.Parent = workspace.Terrain
 
-                    local HitPart, targetPlayer = getClosestTarget()
-                    if HitPart then
-                        local targetVel = targetVelocities[targetPlayer] or HitPart.Velocity or Vector3.zero
-                        local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
+            beam.Attachment0 = attach0
+            beam.Attachment1 = attach1
+            beam.Parent = workspace.Terrain
 
-                        Arguments[3] = getDirection(A_Origin, HitPart.Position + targetVel * predictAmount)
-                        local result = oldNamecall(unpack(Arguments))
+            task.delay(3.5, function()
+                beam:Destroy()
+                attach0:Destroy()
+                attach1:Destroy()
+            end)
+        end
 
-                        if result and result.Instance then
-                            local hitChar = result.Instance:FindFirstAncestorOfClass("Model")
-                            if hitChar and Players:GetPlayerFromCharacter(hitChar) then
-                                if _G.Config.SilentAimbotShowTracer then
-                                    createTracer(A_Origin, result.Position)
+        local function getClosestTarget()
+            if not _G.Config.SilentAimbotEnabled then return nil, nil end
+
+            local cam = workspace.CurrentCamera or Camera
+            Camera = cam
+            WorldToScreen = cam.WorldToScreenPoint
+
+            local closestPart = nil
+            local closestPlayer = nil
+            local closestDist = _G.Config.SilentAimbotFOV or 250
+
+            local vp = cam.ViewportSize
+            local centerX, centerY = vp.X / 2, vp.Y / 2
+
+            for _, Player in next, GetPlayers(Players) do
+                if Player ~= LocalPlayer then
+                    local Character = Player.Character
+                    if Character then
+                        local HumanoidRootPart = FindFirstChild(Character, "HumanoidRootPart")
+                        local Humanoid = FindFirstChild(Character, "Humanoid")
+                        if HumanoidRootPart and Humanoid and Humanoid.Health > 0 then
+                            local Vec3, OnScreen = WorldToScreen(cam, HumanoidRootPart.Position)
+                            if Vec3 and OnScreen then
+                                local dx, dy = Vec3.X - centerX, Vec3.Y - centerY
+                                local dist = math.sqrt(dx * dx + dy * dy)
+                                if dist < closestDist then
+                                    closestDist = dist
+                                    closestPart = HumanoidRootPart
+                                    closestPlayer = Player
                                 end
                             end
                         end
-
-                        return result
                     end
                 end
             end
+
+            return closestPart, closestPlayer
         end
 
-        return oldNamecall(...)
-    end))
-
-    local oldIndex = nil
-    oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, Index)
-        if self == Mouse and not checkcaller() then
-            local HitPart = getClosestTarget()
-            if HitPart then
-                local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
-
-                if Index == "Target" or Index == "target" then
-                    return HitPart
-                elseif Index == "Hit" or Index == "hit" then
-                    return HitPart.CFrame + (HitPart.Velocity * predictAmount)
-                elseif Index == "X" or Index == "x" then
-                    return self.X
-                elseif Index == "Y" or Index == "y" then
-                    return self.Y
-                elseif Index == "UnitRay" then
-                    return Ray.new(self.Origin, ((HitPart.Position + HitPart.Velocity * predictAmount) - self.Origin).Unit)
+        state.velConn = RunService.RenderStepped:Connect(function(deltaTime)
+            local dt = deltaTime > 0 and deltaTime or 0.001
+            for _, player in next, GetPlayers(Players) do
+                if player ~= LocalPlayer then
+                    local character = player.Character
+                    if character then
+                        local root = FindFirstChild(character, "HumanoidRootPart")
+                        if root then
+                            local pos = root.Position
+                            local last = targetLastPositions[player]
+                            if last then
+                                targetVelocities[player] = (pos - last) / dt
+                            end
+                            targetLastPositions[player] = pos
+                        end
+                    end
                 end
             end
-        end
 
-        return oldIndex(self, Index)
-    end))
-end)
-if not succ then warn('( !!! ) SILENT AIMBOT: ' .. err) end
+            if not state.inert then
+                local now = tick()
+                if now - (state.lastCheck or 0) > 0.5 then
+                    state.lastCheck = now
+                    local present = saPresent(state)
+                    if not present and saReinstalls < 3 then
+                        saReinstalls = saReinstalls + 1
+                        warn('[EzP] silent aim: hook fucked up, set -> (' .. saReinstalls .. ')')
+                        silentAimbot = nil
+                        pcall(function()
+                            if state.velConn then state.velConn:Disconnect() end
+                        end)
+                        pcall(installSilentAimbotImpl)
+                    end
+                end
+            end
+        end)
+
+        local oldNamecall
+        local wrappedNamecall = newcclosure(function(self, ...)
+            if state.probing then
+                state.probeNC = state.probeNC + 1
+                return oldNamecall(self, ...)
+            end
+            if self == workspace and getnamecallmethod() == "Raycast" and not checkcaller() then
+                if state.inert or not _G.Config.SilentAimbotEnabled then
+                    return oldNamecall(self, ...)
+                end
+
+                local Arguments = { self, ... }
+                if not ValidateArguments(Arguments, ExpectedArguments.Raycast) then
+                    return oldNamecall(self, ...)
+                end
+
+                local A_Origin = Arguments[2]
+
+                local bulletDelay = _G.Config.SilentAimbotBulletDelay
+                if bulletDelay and bulletDelay > 0 then
+                    task.wait(bulletDelay)
+                end
+
+                local HitPart, targetPlayer = getClosestTarget()
+                if not HitPart then
+                    return oldNamecall(self, ...)
+                end
+
+                local targetVel = targetVelocities[targetPlayer] or HitPart.Velocity or Vector3.zero
+                local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
+                Arguments[3] = getDirection(A_Origin, HitPart.Position + targetVel * predictAmount)
+
+                local result = oldNamecall(unpackFn(Arguments))
+
+                if result and result.Instance and _G.Config.SilentAimbotShowTracer then
+                    local hitChar = result.Instance:FindFirstAncestorOfClass("Model")
+                    if hitChar and Players:GetPlayerFromCharacter(hitChar) then
+                        createTracer(A_Origin, result.Position)
+                    end
+                end
+
+                return result
+            end
+
+            return oldNamecall(self, ...)
+        end)
+        state.wrappedNamecall = wrappedNamecall
+
+        local oldIndex
+        local wrappedIndex = newcclosure(function(self, Index)
+            if state.probing then
+                state.probeIdx = state.probeIdx + 1
+                return oldIndex(self, Index)
+            end
+            if self == Mouse and not state.inert and not checkcaller() then
+                if Index == "X" or Index == "x" or Index == "Y" or Index == "y" or Index == "Origin" then
+                    return oldIndex(self, Index)
+                end
+                local HitPart, targetPlayer = getClosestTarget()
+                if HitPart then
+                    local predictAmount = _G.Config.SilentAimbotPrediction or 0.165
+                    local targetVel = targetVelocities[targetPlayer] or HitPart.Velocity or Vector3.zero
+                    if Index == "Target" or Index == "target" then
+                        return HitPart
+                    elseif Index == "Hit" or Index == "hit" then
+                        return HitPart.CFrame + (targetVel * predictAmount)
+                    elseif Index == "UnitRay" then
+                        local origin = oldIndex(self, "Origin")
+                        return Ray.new(origin, ((HitPart.Position + targetVel * predictAmount) - origin).Unit)
+                    end
+                end
+            end
+            return oldIndex(self, Index)
+        end)
+        state.wrappedIndex = wrappedIndex
+
+        local prevNamecall = hookmetamethod(game, "__namecall", wrappedNamecall)
+        local prevIndex = hookmetamethod(game, "__index", wrappedIndex)
+        state.namecall = (type(prevNamecall) == "function") and prevNamecall or function(_, ...) return ... end
+        state.index = (type(prevIndex) == "function") and prevIndex or function(_, key) return key end
+        oldNamecall = state.namecall
+        oldIndex = state.index
+
+        silentAimbot = state
+    end)
+
+    if not ok then
+        warn('( !!! ) SILENT AIMBOT: ' .. tostring(err))
+    end
+    return silentAimbot ~= nil
+end
+
+local function uninstallSilentAimbotImpl()
+    local state = silentAimbot
+    if not state then return end
+
+    state.inert = true
+
+    local present, isHead = saPresent(state)
+    if isHead then
+        removeSilentAimbotHooks(state)
+        silentAimbot = nil
+        return
+    end
+end
+
+function applySilentAimbot()
+    if _G.Config.SilentAimbotEnabled == true then
+        pcall(installSilentAimbotImpl)
+    else
+        pcall(uninstallSilentAimbotImpl)
+    end
+    _G.SilentAimbotInstalled = silentAimbot ~= nil
+    _G.SilentAimbotActive = silentAimbot ~= nil and silentAimbot.inert ~= true
+    return _G.SilentAimbotInstalled
+end
+
+_G.SA_APPLY = applySilentAimbot
+applySilentAimbot()
 
 end
+
